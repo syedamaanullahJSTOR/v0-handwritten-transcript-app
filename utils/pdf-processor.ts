@@ -24,7 +24,7 @@ function ensurePdfJsLoaded() {
   })
 }
 
-export async function extractTextFromPdf(file: File): Promise<string> {
+export async function extractTextFromPdf(file: File, pageNum?: number): Promise<string> {
   try {
     // Ensure PDF.js is properly loaded
     await ensurePdfJsLoaded()
@@ -44,7 +44,31 @@ export async function extractTextFromPdf(file: File): Promise<string> {
 
       let fullText = ""
 
-      // Process each page
+      // If a specific page is requested, only process that page
+      if (pageNum !== undefined) {
+        if (pageNum < 1 || pageNum > pdf.numPages) {
+          throw new Error(`Invalid page number: ${pageNum}. Document has ${pdf.numPages} pages.`)
+        }
+
+        try {
+          console.log(`Processing page ${pageNum}/${pdf.numPages}`)
+          const page = await pdf.getPage(pageNum)
+          const textContent = await page.getTextContent()
+
+          if (!textContent || !textContent.items || textContent.items.length === 0) {
+            console.log(`No text content found on page ${pageNum}`)
+            return ""
+          }
+
+          const pageText = textContent.items.map((item: any) => (item.str || "").trim()).join(" ")
+          return pageText.trim()
+        } catch (pageError) {
+          console.error(`Error extracting text from page ${pageNum}:`, pageError)
+          throw new Error(`Failed to extract text from page ${pageNum}`)
+        }
+      }
+
+      // Process each page if no specific page is requested
       for (let i = 1; i <= pdf.numPages; i++) {
         try {
           console.log(`Processing page ${i}/${pdf.numPages}`)
@@ -73,6 +97,30 @@ export async function extractTextFromPdf(file: File): Promise<string> {
   } catch (error) {
     console.error("Error extracting text from PDF:", error)
     throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+export async function getPdfInfo(file: File): Promise<{ numPages: number }> {
+  try {
+    // Ensure PDF.js is properly loaded
+    await ensurePdfJsLoaded()
+
+    // Get reference to PDF.js
+    const pdfjsLib = window.pdfjsLib
+
+    // Convert file to array buffer
+    const arrayBuffer = await file.arrayBuffer()
+
+    // Load the PDF document
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
+    const pdf = await loadingTask.promise
+
+    return {
+      numPages: pdf.numPages,
+    }
+  } catch (error) {
+    console.error("Error getting PDF info:", error)
+    throw new Error(`Failed to get PDF info: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -117,7 +165,7 @@ export async function convertPdfPageToImage(file: File, pageNum = 1, scale = 1.5
         canvas.toBlob(
           (blob) => {
             if (blob) {
-              resolve(new File([blob], "page.png", { type: "image/png" }))
+              resolve(new File([blob], `page-${pageNum}.png`, { type: "image/png" }))
             } else {
               reject(new Error("Could not convert PDF to image"))
             }

@@ -3,12 +3,12 @@
 import { useState, useEffect } from "react"
 import { FileUpload } from "@/components/file-upload"
 import { TranscriptDisplay } from "@/components/transcript-display"
+import { DocumentViewer } from "@/components/document-viewer"
 import { processDocument } from "@/app/actions"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Loader2, FileText, AlertCircle, Settings, Zap } from "lucide-react"
-import { extractTextFromPdf } from "@/utils/pdf-processor"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Loader2, FileText, AlertCircle, Settings, Zap, SplitSquareVertical } from "lucide-react"
+import { extractTextFromPdf, getPdfInfo, convertPdfPageToImage } from "@/utils/pdf-processor"
 import { performClientOCR, type OCROptions, type OCRProgress } from "@/utils/ocr-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { formatTranscript } from "@/utils/format-transcript"
@@ -32,15 +32,20 @@ export default function Home() {
   const [transcript, setTranscript] = useState<string | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [originalFile, setOriginalFile] = useState<File | null>(null)
+  const [currentPageFile, setCurrentPageFile] = useState<File | null>(null)
   const [fileName, setFileName] = useState<string | null>(null)
   const [processingMethod, setProcessingMethod] = useState<"extracted" | "ocr" | null>(null)
   const [processingStatus, setProcessingStatus] = useState<string>("")
   const [pdfJsLoaded, setPdfJsLoaded] = useState(false)
   const [pdfJsWorkerLoaded, setPdfJsWorkerLoaded] = useState(false)
   const [documentTruncated, setDocumentTruncated] = useState<boolean>(false)
-  const [totalPages, setTotalPages] = useState<number>(0)
+  const [totalPages, setTotalPages] = useState<number>(1)
+  const [currentPage, setCurrentPage] = useState<number>(1)
   const [progressValue, setProgressValue] = useState<number>(0)
   const [processingTimeout, setProcessingTimeout] = useState<NodeJS.Timeout | null>(null)
+  const [viewMode, setViewMode] = useState<"transcript" | "document" | "split">("split")
+  const [pageTranscripts, setPageTranscripts] = useState<Map<number, string>>(new Map())
 
   // OCR options
   const [ocrOptions, setOcrOptions] = useState<OCROptions>({
@@ -131,11 +136,76 @@ export default function Home() {
     setProgressValue(Math.round(progress.progress * 100))
   }
 
+  // Handle page change in the document viewer
+  const handlePageChange = async (page: number) => {
+    if (!originalFile || page === currentPage) return
+
+    setCurrentPage(page)
+
+    try {
+      // For PDFs, we need to convert the page to an image for display
+      if (originalFile.type === "application/pdf") {
+        const pageImage = await convertPdfPageToImage(originalFile, page)
+        setCurrentPageFile(pageImage)
+
+        // If we have a transcript for this page already, use it
+        if (pageTranscripts.has(page)) {
+          setTranscript(pageTranscripts.get(page) || "")
+        } else {
+          // Otherwise, try to extract text from this page
+          setProcessingStatus(`Extracting text from page ${page}...`)
+          setIsProcessing(true)
+
+          try {
+            // First try to extract text directly
+            const pageText = await extractTextFromPdf(originalFile, page)
+
+            if (pageText && pageText.trim().length > 10) {
+              // Store the transcript for this page
+              const newPageTranscripts = new Map(pageTranscripts)
+              newPageTranscripts.set(page, pageText)
+              setPageTranscripts(newPageTranscripts)
+              setTranscript(pageText)
+              setProcessingMethod("extracted")
+            } else {
+              // If no text was extracted, run OCR on this page
+              setProcessingStatus(`Running OCR on page ${page}...`)
+              const pageImage = await convertPdfPageToImage(originalFile, page)
+              const ocrText = await performClientOCR(pageImage, ocrOptions)
+
+              // Store the transcript for this page
+              const newPageTranscripts = new Map(pageTranscripts)
+              newPageTranscripts.set(page, ocrText)
+              setPageTranscripts(newPageTranscripts)
+              setTranscript(ocrText)
+              setProcessingMethod("ocr")
+            }
+          } catch (error) {
+            console.error(`Error processing page ${page}:`, error)
+            setError(`Failed to process page ${page}. ${error instanceof Error ? error.message : ""}`)
+          }
+
+          setIsProcessing(false)
+        }
+      } else {
+        // For non-PDFs, we just have one page
+        setCurrentPageFile(originalFile)
+      }
+    } catch (error) {
+      console.error("Error changing page:", error)
+      setError(`Failed to change to page ${page}. ${error instanceof Error ? error.message : ""}`)
+    }
+  }
+
   const handleFileUpload = async (file: File) => {
     try {
       setIsProcessing(true)
       setError(null)
       setFileName(file.name)
+      setOriginalFile(file)
+      setCurrentPageFile(file)
+      setCurrentPage(1)
+      setPageTranscripts(new Map())
       setProcessingStatus("Preparing document...")
       setProgressValue(0)
 
@@ -148,6 +218,21 @@ export default function Home() {
       }, 15000) // 15 seconds
 
       setProcessingTimeout(timeout)
+
+      // Get total pages for PDFs
+      if (file.type === "application/pdf") {
+        try {
+          const pdfInfo = await getPdfInfo(file)
+          setTotalPages(pdfInfo.numPages)
+          setDocumentTruncated(pdfInfo.numPages > 3)
+        } catch (pdfInfoError) {
+          console.error("Error getting PDF info:", pdfInfoError)
+          setTotalPages(1)
+        }
+      } else {
+        setTotalPages(1)
+        setDocumentTruncated(false)
+      }
 
       // Handle PDFs on the client side
       if (file.type === "application/pdf") {
@@ -170,6 +255,16 @@ export default function Home() {
           if (extractedText && extractedText.trim().length > 10) {
             setTranscript(formatTranscript(extractedText))
             setProcessingMethod("extracted")
+
+            // Store the transcript for the first page
+            const newPageTranscripts = new Map()
+            newPageTranscripts.set(1, extractedText)
+            setPageTranscripts(newPageTranscripts)
+
+            // Convert the first page to an image for display
+            const pageImage = await convertPdfPageToImage(file, 1)
+            setCurrentPageFile(pageImage)
+
             setIsProcessing(false)
             clearTimeout(timeout)
             return
@@ -179,20 +274,22 @@ export default function Home() {
 
           // If no meaningful text was extracted, run OCR directly on the PDF
           setProcessingStatus("No embedded text found. Running OCR on PDF...")
-          // Get the total page count from the PDF
+
           try {
-            const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise
-            const pageCount = pdf.numPages
-            setTotalPages(pageCount)
-            setDocumentTruncated(pageCount > 3)
-          } catch (pageCountError) {
-            console.error("Error getting page count:", pageCountError)
-          }
-          try {
-            const ocrText = await performClientOCR(file, ocrOptions, handleOcrProgress)
+            // Convert the first page to an image for display
+            const pageImage = await convertPdfPageToImage(file, 1)
+            setCurrentPageFile(pageImage)
+
+            const ocrText = await performClientOCR(pageImage, ocrOptions, handleOcrProgress)
             if (ocrText && ocrText.trim().length > 0) {
               setTranscript(formatTranscript(ocrText))
               setProcessingMethod("ocr")
+
+              // Store the transcript for the first page
+              const newPageTranscripts = new Map()
+              newPageTranscripts.set(1, ocrText)
+              setPageTranscripts(newPageTranscripts)
+
               setIsProcessing(false)
               clearTimeout(timeout)
               return
@@ -280,209 +377,211 @@ export default function Home() {
     }
   }
 
-  return (
-    <main className="container mx-auto py-8 px-4">
-      <Card className="w-full max-w-4xl mx-auto">
-        <CardHeader className="text-center">
-          <CardTitle className="text-3xl">Document Transcript Generator</CardTitle>
-          <CardDescription>Upload a document to extract text or generate a transcript using OCR</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {!transcript && !isProcessing ? (
-            <div className="flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg">
-              <div className="w-full flex justify-between mb-4">
-                <Button
-                  variant={ocrOptions.quickMode ? "default" : "outline"}
-                  size="sm"
-                  className="flex items-center"
-                  onClick={() => setOcrOptions({ ...ocrOptions, quickMode: !ocrOptions.quickMode })}
-                >
-                  <Zap className={`h-4 w-4 mr-2 ${ocrOptions.quickMode ? "text-white" : "text-yellow-500"}`} />
-                  {ocrOptions.quickMode ? "Quick Mode: ON" : "Quick Mode: OFF"}
+  // Render the split view layout
+  const renderContent = () => {
+    if (!transcript && !isProcessing) {
+      return (
+        <div className="flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg">
+          <div className="w-full flex justify-between mb-4">
+            <Button
+              variant={ocrOptions.quickMode ? "default" : "outline"}
+              size="sm"
+              className="flex items-center"
+              onClick={() => setOcrOptions({ ...ocrOptions, quickMode: !ocrOptions.quickMode })}
+            >
+              <Zap className={`h-4 w-4 mr-2 ${ocrOptions.quickMode ? "text-white" : "text-yellow-500"}`} />
+              {ocrOptions.quickMode ? "Quick Mode: ON" : "Quick Mode: OFF"}
+            </Button>
+
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm" className="flex items-center">
+                  <Settings className="h-4 w-4 mr-2" />
+                  OCR Settings
                 </Button>
-
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="flex items-center">
-                      <Settings className="h-4 w-4 mr-2" />
-                      OCR Settings
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>OCR Settings</DialogTitle>
-                      <DialogDescription>
-                        Configure OCR settings to improve text recognition for different document types.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="py-4 space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="handwriting">Optimize for Handwritten Text</Label>
-                          <p className="text-sm text-muted-foreground">
-                            Applies special processing for handwritten documents
-                          </p>
-                        </div>
-                        <Switch
-                          id="handwriting"
-                          checked={ocrOptions.optimizeForHandwriting}
-                          onCheckedChange={(checked) =>
-                            setOcrOptions({ ...ocrOptions, optimizeForHandwriting: checked })
-                          }
-                        />
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="quickMode">Quick Mode</Label>
-                          <p className="text-sm text-muted-foreground">
-                            Faster processing with slightly reduced accuracy
-                          </p>
-                        </div>
-                        <Switch
-                          id="quickMode"
-                          checked={ocrOptions.quickMode}
-                          onCheckedChange={(checked) => setOcrOptions({ ...ocrOptions, quickMode: checked })}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="contrast">Enhance Contrast</Label>
-                          <p className="text-sm text-muted-foreground">
-                            Improves contrast to better detect text on faded documents
-                          </p>
-                        </div>
-                        <Switch
-                          id="contrast"
-                          checked={ocrOptions.enhanceContrast}
-                          onCheckedChange={(checked) => setOcrOptions({ ...ocrOptions, enhanceContrast: checked })}
-                        />
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button
-                        onClick={() => {
-                          setOcrOptions({
-                            optimizeForHandwriting: false,
-                            enhanceContrast: false,
-                            language: "eng",
-                            quickMode: false,
-                          })
-                        }}
-                        variant="outline"
-                        className="mr-2"
-                      >
-                        Reset to Defaults
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </div>
-
-              <FileUpload onFileSelect={handleFileUpload} />
-              <p className="mt-4 text-sm text-muted-foreground">Supported formats: PDF, PNG, JPG, TIFF</p>
-              {ocrOptions.quickMode && (
-                <p className="mt-2 text-sm text-yellow-600">Quick Mode is enabled for faster processing</p>
-              )}
-              {ocrOptions.optimizeForHandwriting && (
-                <p className="mt-2 text-sm text-green-600">Handwritten text optimization is enabled</p>
-              )}
-              {!pdfJsLoaded && <p className="mt-2 text-sm text-amber-600">Loading PDF processing library...</p>}
-              {pdfJsLoaded && !pdfJsWorkerLoaded && (
-                <p className="mt-2 text-sm text-amber-600">Loading PDF worker library...</p>
-              )}
-            </div>
-          ) : isProcessing ? (
-            <div className="flex flex-col items-center justify-center p-12">
-              <Loader2 className="h-12 w-12 animate-spin text-primary" />
-              <p className="mt-4 text-lg">Processing your document...</p>
-              <div className="w-full max-w-md mt-4">
-                <Progress value={progressValue} className="h-2 w-full" />
-                <p className="text-sm text-muted-foreground mt-2">{processingStatus}</p>
-              </div>
-              {ocrOptions.quickMode && (
-                <p className="mt-2 text-sm text-yellow-600">Quick Mode is enabled for faster processing</p>
-              )}
-              {ocrOptions.optimizeForHandwriting && (
-                <p className="mt-2 text-sm text-green-600">Using handwritten text optimization</p>
-              )}
-            </div>
-          ) : (
-            <Tabs defaultValue="transcript">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="transcript">Transcript</TabsTrigger>
-                <TabsTrigger value="info">Document Info</TabsTrigger>
-              </TabsList>
-              <TabsContent value="transcript" className="p-4">
-                <TranscriptDisplay text={transcript || ""} />
-              </TabsContent>
-              <TabsContent value="info" className="p-4">
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <h3 className="font-medium">File Name</h3>
-                      <p className="text-sm text-muted-foreground">{fileName}</p>
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Processing Method</h3>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>OCR Settings</DialogTitle>
+                  <DialogDescription>
+                    Configure OCR settings to improve text recognition for different document types.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="py-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="handwriting">Optimize for Handwritten Text</Label>
                       <p className="text-sm text-muted-foreground">
-                        {processingMethod === "extracted" ? "Extracted from document" : "Generated using OCR"}
+                        Applies special processing for handwritten documents
                       </p>
                     </div>
-                    {processingMethod === "ocr" && (
-                      <div>
-                        <h3 className="font-medium">OCR Settings</h3>
-                        <p className="text-sm text-muted-foreground">
-                          {ocrOptions.optimizeForHandwriting
-                            ? "Optimized for handwritten text"
-                            : "Standard OCR (best for printed text)"}
-                          {ocrOptions.quickMode ? " with Quick Mode" : ""}
-                        </p>
-                      </div>
-                    )}
-                    {documentTruncated && (
-                      <div className="col-span-2">
-                        <Alert className="mt-2 bg-amber-50 border-amber-200">
-                          <AlertCircle className="h-4 w-4 text-amber-500" />
-                          <AlertTitle className="text-amber-700">Page Limit Applied</AlertTitle>
-                          <AlertDescription className="text-amber-600">
-                            This document has {totalPages} pages. Only the first 3 pages were processed for performance
-                            reasons.
-                          </AlertDescription>
-                        </Alert>
-                      </div>
-                    )}
+                    <Switch
+                      id="handwriting"
+                      checked={ocrOptions.optimizeForHandwriting}
+                      onCheckedChange={(checked) => setOcrOptions({ ...ocrOptions, optimizeForHandwriting: checked })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="quickMode">Quick Mode</Label>
+                      <p className="text-sm text-muted-foreground">Faster processing with slightly reduced accuracy</p>
+                    </div>
+                    <Switch
+                      id="quickMode"
+                      checked={ocrOptions.quickMode}
+                      onCheckedChange={(checked) => setOcrOptions({ ...ocrOptions, quickMode: checked })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="contrast">Enhance Contrast</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Improves contrast to better detect text on faded documents
+                      </p>
+                    </div>
+                    <Switch
+                      id="contrast"
+                      checked={ocrOptions.enhanceContrast}
+                      onCheckedChange={(checked) => setOcrOptions({ ...ocrOptions, enhanceContrast: checked })}
+                    />
                   </div>
                 </div>
-              </TabsContent>
-            </Tabs>
-          )}
+                <DialogFooter>
+                  <Button
+                    onClick={() => {
+                      setOcrOptions({
+                        optimizeForHandwriting: false,
+                        enhanceContrast: false,
+                        language: "eng",
+                        quickMode: false,
+                      })
+                    }}
+                    variant="outline"
+                    className="mr-2"
+                  >
+                    Reset to Defaults
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
 
-          {error && (
-            <Alert variant="destructive" className="mt-4">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
+          <FileUpload onFileSelect={handleFileUpload} />
+          <p className="mt-4 text-sm text-muted-foreground">Supported formats: PDF, PNG, JPG, TIFF</p>
+          {ocrOptions.quickMode && (
+            <p className="mt-2 text-sm text-yellow-600">Quick Mode is enabled for faster processing</p>
           )}
-        </CardContent>
-        <CardFooter className="flex justify-center">
-          {transcript && (
+          {ocrOptions.optimizeForHandwriting && (
+            <p className="mt-2 text-sm text-green-600">Handwritten text optimization is enabled</p>
+          )}
+          {!pdfJsLoaded && <p className="mt-2 text-sm text-amber-600">Loading PDF processing library...</p>}
+          {pdfJsLoaded && !pdfJsWorkerLoaded && (
+            <p className="mt-2 text-sm text-amber-600">Loading PDF worker library...</p>
+          )}
+        </div>
+      )
+    } else if (isProcessing) {
+      return (
+        <div className="flex flex-col items-center justify-center p-12">
+          <Loader2 className="h-12 w-12 animate-spin text-primary" />
+          <p className="mt-4 text-lg">Processing your document...</p>
+          <div className="w-full max-w-md mt-4">
+            <Progress value={progressValue} className="h-2 w-full" />
+            <p className="text-sm text-muted-foreground mt-2">{processingStatus}</p>
+          </div>
+          {ocrOptions.quickMode && (
+            <p className="mt-2 text-sm text-yellow-600">Quick Mode is enabled for faster processing</p>
+          )}
+          {ocrOptions.optimizeForHandwriting && (
+            <p className="mt-2 text-sm text-green-600">Using handwritten text optimization</p>
+          )}
+        </div>
+      )
+    } else {
+      // Render the split view with document and transcript
+      return (
+        <div className="flex flex-col h-full">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex space-x-2">
+              <Button
+                variant={viewMode === "split" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setViewMode("split")}
+                className="flex items-center"
+              >
+                <SplitSquareVertical className="h-4 w-4 mr-2" />
+                Split View
+              </Button>
+              <Button
+                variant={viewMode === "document" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setViewMode("document")}
+                className="flex items-center"
+              >
+                Document
+              </Button>
+              <Button
+                variant={viewMode === "transcript" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setViewMode("transcript")}
+                className="flex items-center"
+              >
+                Transcript
+              </Button>
+            </div>
             <Button
               variant="outline"
+              size="sm"
               onClick={() => {
                 setTranscript(null)
                 setFileName(null)
                 setProcessingMethod(null)
+                setOriginalFile(null)
+                setCurrentPageFile(null)
               }}
-              className="mr-2"
             >
               Upload Another Document
             </Button>
+          </div>
+
+          <div
+            className={`grid gap-4 h-[calc(100vh-300px)] ${
+              viewMode === "split" ? "grid-cols-2" : viewMode === "document" ? "grid-cols-1" : "grid-cols-1"
+            }`}
+          >
+            {(viewMode === "split" || viewMode === "document") && (
+              <div className="h-full">
+                <DocumentViewer
+                  file={currentPageFile}
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                />
+              </div>
+            )}
+
+            {(viewMode === "split" || viewMode === "transcript") && (
+              <div className="h-full">
+                <TranscriptDisplay text={transcript || ""} compact={viewMode === "split"} />
+              </div>
+            )}
+          </div>
+
+          {documentTruncated && (
+            <Alert className="mt-4 bg-amber-50 border-amber-200">
+              <AlertCircle className="h-4 w-4 text-amber-500" />
+              <AlertTitle className="text-amber-700">Page Limit Applied</AlertTitle>
+              <AlertDescription className="text-amber-600">
+                This document has {totalPages} pages. Only the first 3 pages were processed for OCR. You can still
+                navigate through all pages.
+              </AlertDescription>
+            </Alert>
           )}
-          {transcript && (
+
+          <div className="mt-4 flex justify-end">
             <Button
               onClick={() => {
-                const blob = new Blob([transcript], { type: "text/plain" })
+                const blob = new Blob([transcript || ""], { type: "text/plain" })
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement("a")
                 a.href = url
@@ -496,8 +595,30 @@ export default function Home() {
               <FileText className="mr-2 h-4 w-4" />
               Download Transcript
             </Button>
+          </div>
+        </div>
+      )
+    }
+  }
+
+  return (
+    <main className="container mx-auto py-8 px-4">
+      <Card className="w-full max-w-6xl mx-auto">
+        <CardHeader className="text-center">
+          <CardTitle className="text-3xl">Document Transcript Generator</CardTitle>
+          <CardDescription>Upload a document to extract text or generate a transcript using OCR</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {renderContent()}
+
+          {error && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
-        </CardFooter>
+        </CardContent>
       </Card>
     </main>
   )
