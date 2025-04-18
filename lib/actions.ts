@@ -18,7 +18,7 @@ let documents: Document[] = [
     status: "completed",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    pages: 2, // Add pages property
+    pages: 2,
     textMap: [
       {
         text: "My",
@@ -50,9 +50,40 @@ let documents: Document[] = [
       },
     ],
   },
+  // Add a sample document with ID "2" to ensure it exists
+  {
+    id: "2",
+    name: "Research Notes.pdf",
+    url: "/open-book-knowledge.png",
+    contentType: "image/png",
+    transcript:
+      "Research Notes: Colonial Architecture\n\nObservations on the architectural styles prevalent in the northeastern colonies, with particular attention to public buildings and churches.\n\nThe Georgian style dominates in urban centers, characterized by symmetrical facades, classical details, and formal proportions. Notable examples include King's Chapel in Boston (1749) and Christ Church in Philadelphia (1744).\n\nIn rural areas, simpler vernacular styles persist, often incorporating local building materials and traditional construction techniques brought from England, the Netherlands, and Germany, depending on the settlement patterns.\n\nThe meetinghouse form is particularly significant, representing both religious and civic functions in Puritan communities. These structures typically feature a rectangular plan, central entrance on the long side, and minimal ornamentation.\n\nFurther investigation needed on the influence of climate adaptations on colonial building practices, especially regarding roof pitch, window placement, and heating systems.",
+    status: "completed",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    pages: 3,
+    textMap: [
+      {
+        text: "Research",
+        bbox: { x: 10, y: 10, width: 20, height: 4 },
+      },
+      {
+        text: "Notes:",
+        bbox: { x: 32, y: 10, width: 15, height: 4 },
+      },
+      {
+        text: "Colonial",
+        bbox: { x: 49, y: 10, width: 18, height: 4 },
+      },
+      {
+        text: "Architecture",
+        bbox: { x: 69, y: 10, width: 25, height: 4 },
+      },
+    ],
+  },
 ]
 
-let nextId = 2 // Start from 2 since we already have document with ID "1"
+let nextId = 3 // Start from 3 since we already have documents with IDs "1" and "2"
 
 export async function uploadDocument(formData: FormData) {
   try {
