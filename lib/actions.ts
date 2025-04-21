@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { generateTranscript } from "./ocr"
 import type { Document, TextMapItem } from "./types"
 import { createServerSupabaseClient } from "./supabase"
+import { getServerPdfPageCount } from "./server-pdf-utils"
 
 // Upload a document
 export async function uploadDocument(formData: FormData) {
@@ -22,6 +23,12 @@ export async function uploadDocument(formData: FormData) {
         // Get file data as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer()
         const buffer = Buffer.from(arrayBuffer)
+
+        // Determine actual page count for PDFs
+        let actualPages = 1
+        if (file.type === "application/pdf") {
+          actualPages = await getServerPdfPageCount(buffer)
+        }
 
         // Convert to base64 string on the server side
         const base64String = buffer.toString("base64")
@@ -51,7 +58,7 @@ export async function uploadDocument(formData: FormData) {
         documentIds.push(fileData.id)
 
         // Start processing in the background
-        processDocument(fileData.id, file, dataUrl)
+        processDocument(fileData.id, file, dataUrl, actualPages)
       } catch (error) {
         console.error("Error processing file:", error)
         throw error
@@ -76,7 +83,7 @@ export async function uploadDocument(formData: FormData) {
 }
 
 // Process a document to generate transcript
-async function processDocument(id: string, file: File, fileUrl: string) {
+async function processDocument(id: string, file: File, fileUrl: string, actualPages = 1) {
   try {
     const supabase = createServerSupabaseClient()
 
@@ -91,6 +98,7 @@ async function processDocument(id: string, file: File, fileUrl: string) {
         content: transcript,
         original_content: transcript, // Store original for revert functionality
         status: "completed",
+        actual_pages: actualPages, // Store the actual page count
       })
       .select()
       .single()
@@ -168,7 +176,8 @@ export async function getDocuments(): Promise<Document[]> {
           status,
           created_at,
           updated_at,
-          original_content
+          original_content,
+          actual_pages
         )
       `)
       .order("created_at", { ascending: false })
@@ -193,6 +202,7 @@ export async function getDocuments(): Promise<Document[]> {
         createdAt: file.created_at,
         updatedAt: transcript?.updated_at || file.created_at,
         transcriptId: transcript?.id,
+        actualPages: transcript?.actual_pages || 1,
       }
     })
 
@@ -273,14 +283,17 @@ export async function getDocumentById(id: string): Promise<Document | null> {
       }
     }
 
-    // Determine the number of pages
-    let pages = 1
+    // Determine the number of pages from transcript content
+    let transcriptPageCount = 1
     if (transcript?.content) {
       const pageMatches = transcript.content.match(/Page \d+/g)
       if (pageMatches && pageMatches.length > 0) {
-        pages = pageMatches.length
+        transcriptPageCount = pageMatches.length
       }
     }
+
+    // Use actual_pages if available, otherwise fall back to transcript page count
+    const actualPages = transcript?.actual_pages || 1
 
     // Construct the document object
     const document: Document = {
@@ -296,7 +309,8 @@ export async function getDocumentById(id: string): Promise<Document | null> {
       textMap,
       transcriptId: transcript?.id,
       metadata,
-      pages,
+      pages: transcriptPageCount, // Number of page markers in transcript
+      actualPages, // Actual number of pages in the document
     }
 
     return document

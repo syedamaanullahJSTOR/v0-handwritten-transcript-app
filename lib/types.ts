@@ -10,9 +10,10 @@ export interface Document {
   createdAt: string
   updatedAt: string
   textMap?: TextMapItem[]
-  pages?: number
+  pages?: number // Number of page markers in transcript
+  actualPages?: number // Actual number of pages in the document
   metadata?: DocumentMetadata
-  transcriptId?: string // Added this field
+  transcriptId?: string
 }
 
 export interface TextMapItem {

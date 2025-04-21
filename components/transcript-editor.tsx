@@ -326,17 +326,16 @@ the late 50's and 60's.`
     const cursorPosition = textarea.selectionStart
 
     // Find the position of all "Page X" markers
-    const pageMarkers = [...text.matchAll(/Page \d+/g)]
+    const pageMarkers = [...text.matchAll(/Page (\\d+)/g)]
     if (!pageMarkers.length) return
 
     // Determine which page section the cursor is in
-    let currentPage = 1
+    let requestedPage = 1
     for (const match of pageMarkers) {
       if (match.index !== undefined && match.index <= cursorPosition) {
         // Extract the page number from the match
-        const pageMatch = match[0].match(/\d+/)
-        if (pageMatch) {
-          currentPage = Number.parseInt(pageMatch[0], 10)
+        if (match[1]) {
+          requestedPage = Number.parseInt(match[1], 10)
         }
       } else {
         // We've gone past the cursor position, so stop
@@ -345,8 +344,9 @@ the late 50's and 60's.`
     }
 
     // Dispatch event to change page in document viewer
+    // The document viewer will validate if this page exists
     const event = new CustomEvent("change-page", {
-      detail: { page: currentPage },
+      detail: { page: requestedPage },
     })
     window.dispatchEvent(event)
   }

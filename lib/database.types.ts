@@ -39,6 +39,7 @@ export interface Database {
           created_at: string
           updated_at: string
           original_content: string | null
+          actual_pages: number | null
         }
         Insert: {
           id?: string
@@ -49,6 +50,7 @@ export interface Database {
           created_at?: string
           updated_at?: string
           original_content?: string | null
+          actual_pages?: number | null
         }
         Update: {
           id?: string
@@ -59,6 +61,7 @@ export interface Database {
           created_at?: string
           updated_at?: string
           original_content?: string | null
+          actual_pages?: number | null
         }
       }
       transcript_versions: {

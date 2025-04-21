@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { ZoomIn, ZoomOut, RotateCw, Maximize, ChevronLeft, ChevronRight, FileText, Download } from "lucide-react"
 import type { Document } from "@/lib/types"
+import { getEstimatedPageCount } from "@/lib/fallback-pdf-utils"
 
 interface DocumentViewerProps {
   document: Document
@@ -18,7 +19,11 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   const [isImageLoaded, setIsImageLoaded] = useState(false)
   const [imageError, setImageError] = useState(false)
   const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null)
+  const [isLoadingPdf, setIsLoadingPdf] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Initialize PDF.js worker
+  // Remove the useEffect that calls initPdfWorker()
 
   // Create object URL for base64 PDFs
   useEffect(() => {
@@ -31,6 +36,7 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
     // If this is a PDF with a data URL, create an object URL for it
     if (document.contentType === "application/pdf" && document.url.startsWith("data:")) {
       try {
+        setIsLoadingPdf(true)
         // Convert data URL to Blob
         const byteString = atob(document.url.split(",")[1])
         const mimeType = document.url.split(",")[0].split(":")[1].split(";")[0]
@@ -44,8 +50,10 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
         const blob = new Blob([ab], { type: mimeType })
         const objectUrl = URL.createObjectURL(blob)
         setPdfObjectUrl(objectUrl)
+        setIsLoadingPdf(false)
       } catch (error) {
         console.error("Error creating object URL for PDF:", error)
+        setIsLoadingPdf(false)
       }
     }
 
@@ -57,30 +65,15 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
     }
   }, [document.url, document.contentType])
 
-  // Calculate total pages based on document content
+  // Determine total pages
   useEffect(() => {
-    // Check if document has pages metadata
-    if (document.pages) {
-      setTotalPages(document.pages)
+    const determineTotalPages = () => {
+      // Use our simplified fallback approach
+      setTotalPages(getEstimatedPageCount(document))
     }
-    // For documents with textMap, use that to determine pages
-    else if (document.textMap && document.textMap.length > 0) {
-      // Find the highest page number in the text map
-      const maxPage = Math.max(...document.textMap.map((item) => item.page || 1))
-      setTotalPages(maxPage)
-    }
-    // Check for "Page X" markers in the transcript
-    else if (document.transcript) {
-      const pageMatches = document.transcript.match(/Page \d+/g)
-      if (pageMatches && pageMatches.length > 0) {
-        setTotalPages(pageMatches.length)
-      } else {
-        // Fallback: estimate based on transcript length
-        const transcriptLength = document.transcript.length
-        const estimatedPages = Math.max(1, Math.ceil(transcriptLength / 3000))
-        setTotalPages(estimatedPages)
-      }
-    }
+
+    // No need for async/await here
+    determineTotalPages()
   }, [document])
 
   // Listen for highlight events from the transcript editor
@@ -100,8 +93,14 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   useEffect(() => {
     const handlePageChange = (event: CustomEvent) => {
       const { page } = event.detail
+      // Only change page if it's within the valid range of the actual document
       if (page >= 1 && page <= totalPages) {
         setCurrentPage(page)
+      }
+      // Otherwise, log a warning but don't change the page
+      else if (page > totalPages) {
+        console.warn(`Requested page ${page} exceeds document page count (${totalPages})`)
+        // Don't change the page - stay on current page
       }
     }
 
@@ -156,6 +155,17 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
 
   // Determine what type of content to display
   const renderDocumentContent = () => {
+    // Show loading indicator while PDF is being processed
+    if (isLoadingPdf) {
+      return (
+        <div className="flex flex-col items-center justify-center p-8 text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mb-4"></div>
+          <h3 className="text-lg font-medium">Loading PDF...</h3>
+          <p className="text-sm text-muted-foreground mt-2">Please wait while we process the document.</p>
+        </div>
+      )
+    }
+
     // Check if we have a placeholder URL (meaning the actual file data is not available)
     if (document.url.includes("/placeholder.svg")) {
       return (
