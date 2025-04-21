@@ -9,14 +9,15 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Download, RotateCcw, Save, Info } from "lucide-react"
 import type { Document } from "@/lib/types"
-import { saveTranscript } from "@/lib/actions"
+import { saveTranscript, revertTranscript, saveMetadata } from "@/lib/actions"
 import { useToast } from "@/hooks/use-toast"
 
 interface TranscriptEditorProps {
   document: Document
+  defaultTab?: "metadata" | "transcript"
 }
 
-export function TranscriptEditor({ document: docData }: TranscriptEditorProps) {
+export function TranscriptEditor({ document: docData, defaultTab = "metadata" }: TranscriptEditorProps) {
   // Current editable transcript
   const [transcript, setTranscript] = useState<string>("")
 
@@ -32,13 +33,55 @@ export function TranscriptEditor({ document: docData }: TranscriptEditorProps) {
   // Track if original has been modified (for revert button)
   const [isOriginalModified, setIsOriginalModified] = useState(false)
 
+  // Metadata fields
+  const [title, setTitle] = useState<string>("")
+  const [alternativeTitle, setAlternativeTitle] = useState<string>("")
+  const [creator, setCreator] = useState<string>("")
+  const [volume, setVolume] = useState<string>("")
+  const [documentType, setDocumentType] = useState<string>("")
+  const [documentDate, setDocumentDate] = useState<string>("")
+  const [format, setFormat] = useState<string>("")
+  const [isMetadataEdited, setIsMetadataEdited] = useState(false)
+
   const [isSaving, setIsSaving] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
+  const transcriptRef = useRef<HTMLTextAreaElement>(null)
+  const metadataTranscriptRef = useRef<HTMLTextAreaElement>(null)
   const { toast } = useToast()
 
   // Initialize transcript state when component mounts or document changes
   useEffect(() => {
-    const defaultText = `George R. Fearing House, Harragansett Avenue
+    // Hardcoded default text with page markers
+    const defaultText = `Page 1
+
+George R. Fearing House, Harragansett Avenue
+Newport, R.I.
+A rather careful imitation of the French chateaux
+of the 18th century, quite different from the
+confused French-roofed American style of
+the late 50's and 60's.
+
+Page 2
+
+George R. Fearing House, Harragansett Avenue
+Newport, R.I.
+A rather careful imitation of the French chateaux
+of the 18th century, quite different from the
+confused French-roofed American style of
+the late 50's and 60's.
+
+Page 3
+
+George R. Fearing House, Harragansett Avenue
+Newport, R.I.
+A rather careful imitation of the French chateaux
+of the 18th century, quite different from the
+confused French-roofed American style of
+the late 50's and 60's.
+
+Page 4
+
+George R. Fearing House, Harragansett Avenue
 Newport, R.I.
 A rather careful imitation of the French chateaux
 of the 18th century, quite different from the
@@ -51,11 +94,25 @@ the late 50's and 60's.`
     // Initialize all three transcript states
     setTranscript(transcriptText)
     setSavedTranscript(transcriptText)
-    setOriginalTranscript(transcriptText)
+    setOriginalTranscript(docData.originalTranscript || transcriptText)
+
+    // Initialize metadata fields
+    if (docData.metadata) {
+      setTitle(docData.metadata.title || docData.name.split(".")[0] || "")
+      setAlternativeTitle(docData.metadata.alternativeTitle || "")
+      setCreator(docData.metadata.creator || "")
+      setVolume(docData.metadata.volume || "")
+      setDocumentType(docData.metadata.documentType || "")
+      setDocumentDate(docData.metadata.documentDate || "")
+      setFormat(docData.metadata.format || "")
+    } else {
+      setTitle(docData.name.split(".")[0] || "")
+    }
 
     // Reset edit states
     setIsEdited(false)
-    setIsOriginalModified(false)
+    setIsMetadataEdited(false)
+    setIsOriginalModified(docData.transcript !== docData.originalTranscript)
   }, [docData])
 
   // Handle changes to the transcript text
@@ -65,17 +122,58 @@ the late 50's and 60's.`
     setIsEdited(newText !== savedTranscript)
   }
 
-  // Revert changes to the original transcript
-  const handleRevert = () => {
-    setTranscript(originalTranscript)
-    setSavedTranscript(originalTranscript)
-    setIsEdited(false)
-    setIsOriginalModified(false)
+  // Handle changes to metadata fields
+  const handleMetadataChange = (field: string, value: string) => {
+    switch (field) {
+      case "title":
+        setTitle(value)
+        break
+      case "alternativeTitle":
+        setAlternativeTitle(value)
+        break
+      case "creator":
+        setCreator(value)
+        break
+      case "volume":
+        setVolume(value)
+        break
+      case "documentType":
+        setDocumentType(value)
+        break
+      case "documentDate":
+        setDocumentDate(value)
+        break
+      case "format":
+        setFormat(value)
+        break
+    }
+    setIsMetadataEdited(true)
+  }
 
-    toast({
-      title: "Transcript reverted",
-      description: "The transcript has been restored to its original version.",
-    })
+  // Revert changes to the original transcript
+  const handleRevert = async () => {
+    try {
+      setIsSaving(true)
+      await revertTranscript(docData.id)
+
+      setTranscript(originalTranscript)
+      setSavedTranscript(originalTranscript)
+      setIsEdited(false)
+      setIsOriginalModified(false)
+
+      toast({
+        title: "Transcript reverted",
+        description: "The transcript has been restored to its original version.",
+      })
+    } catch (error) {
+      toast({
+        title: "Failed to revert transcript",
+        description: "There was an error reverting the transcript. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   // Save changes to the transcript
@@ -105,6 +203,40 @@ the late 50's and 60's.`
       toast({
         title: "Failed to save transcript",
         description: "There was an error saving your changes. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // Save metadata changes
+  const handleSaveMetadata = async () => {
+    if (!isMetadataEdited) return
+
+    setIsSaving(true)
+
+    try {
+      await saveMetadata(docData.id, {
+        title,
+        alternativeTitle,
+        creator,
+        volume,
+        documentType,
+        documentDate,
+        format,
+      })
+
+      setIsMetadataEdited(false)
+
+      toast({
+        title: "Metadata saved",
+        description: "Your metadata changes have been saved successfully.",
+      })
+    } catch (error) {
+      toast({
+        title: "Failed to save metadata",
+        description: "There was an error saving your metadata changes. Please try again.",
         variant: "destructive",
       })
     } finally {
@@ -187,8 +319,37 @@ the late 50's and 60's.`
     }
   }
 
-  // Determine if the transcript is ready for editing
-  const isTranscriptReady = true // Always allow editing regardless of document status
+  // Handle click in transcript to navigate to page
+  const handleTranscriptClick = (e: React.MouseEvent<HTMLTextAreaElement>) => {
+    const textarea = e.currentTarget
+    const text = textarea.value
+    const cursorPosition = textarea.selectionStart
+
+    // Find the position of all "Page X" markers
+    const pageMarkers = [...text.matchAll(/Page \d+/g)]
+    if (!pageMarkers.length) return
+
+    // Determine which page section the cursor is in
+    let currentPage = 1
+    for (const match of pageMarkers) {
+      if (match.index !== undefined && match.index <= cursorPosition) {
+        // Extract the page number from the match
+        const pageMatch = match[0].match(/\d+/)
+        if (pageMatch) {
+          currentPage = Number.parseInt(pageMatch[0], 10)
+        }
+      } else {
+        // We've gone past the cursor position, so stop
+        break
+      }
+    }
+
+    // Dispatch event to change page in document viewer
+    const event = new CustomEvent("change-page", {
+      detail: { page: currentPage },
+    })
+    window.dispatchEvent(event)
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -204,7 +365,7 @@ the late 50's and 60's.`
         </div>
       </div>
 
-      <Tabs defaultValue="metadata" className="flex-1">
+      <Tabs defaultValue={defaultTab} className="flex-1">
         <div className="border-b px-4">
           <TabsList className="mt-2">
             <TabsTrigger value="metadata" className="text-sm">
@@ -229,7 +390,8 @@ the late 50's and 60's.`
               <Input
                 id="title"
                 placeholder="Enter title"
-                defaultValue={docData.name.split(".")[0]}
+                value={title}
+                onChange={(e) => handleMetadataChange("title", e.target.value)}
                 className="w-full"
               />
               <div className="text-xs text-gray-500">Confidence: Low</div>
@@ -243,7 +405,13 @@ the late 50's and 60's.`
                 </Label>
                 <Info className="h-4 w-4 ml-2 text-gray-400" />
               </div>
-              <Input id="alt-title" placeholder="Enter alternative title" className="w-full" />
+              <Input
+                id="alt-title"
+                placeholder="Enter alternative title"
+                value={alternativeTitle}
+                onChange={(e) => handleMetadataChange("alternativeTitle", e.target.value)}
+                className="w-full"
+              />
             </div>
 
             {/* Creator field */}
@@ -254,7 +422,13 @@ the late 50's and 60's.`
                 </Label>
                 <Info className="h-4 w-4 ml-2 text-gray-400" />
               </div>
-              <Input id="creator" placeholder="Enter creator" className="w-full" />
+              <Input
+                id="creator"
+                placeholder="Enter creator"
+                value={creator}
+                onChange={(e) => handleMetadataChange("creator", e.target.value)}
+                className="w-full"
+              />
               <div className="text-xs text-gray-500">Confidence: High</div>
             </div>
 
@@ -265,7 +439,13 @@ the late 50's and 60's.`
                   VOLUME
                 </Label>
               </div>
-              <Input id="volume" placeholder="Enter volume" className="w-full" />
+              <Input
+                id="volume"
+                placeholder="Enter volume"
+                value={volume}
+                onChange={(e) => handleMetadataChange("volume", e.target.value)}
+                className="w-full"
+              />
             </div>
 
             {/* Type field */}
@@ -276,7 +456,13 @@ the late 50's and 60's.`
                 </Label>
                 <Info className="h-4 w-4 ml-2 text-gray-400" />
               </div>
-              <Input id="type" placeholder="Enter type" defaultValue="Letter" className="w-full" />
+              <Input
+                id="type"
+                placeholder="Enter type"
+                value={documentType}
+                onChange={(e) => handleMetadataChange("documentType", e.target.value)}
+                className="w-full"
+              />
               <div className="text-xs text-gray-500">Confidence: Low</div>
             </div>
 
@@ -288,7 +474,13 @@ the late 50's and 60's.`
                 </Label>
                 <Info className="h-4 w-4 ml-2 text-gray-400" />
               </div>
-              <Input id="date" placeholder="Enter date" className="w-full" />
+              <Input
+                id="date"
+                placeholder="Enter date"
+                value={documentDate}
+                onChange={(e) => handleMetadataChange("documentDate", e.target.value)}
+                className="w-full"
+              />
               <div className="text-xs text-gray-500">Confidence: Low</div>
             </div>
 
@@ -300,7 +492,27 @@ the late 50's and 60's.`
                 </Label>
                 <Info className="h-4 w-4 ml-2 text-gray-400" />
               </div>
-              <Input id="format" placeholder="Enter format" className="w-full" />
+              <Input
+                id="format"
+                placeholder="Enter format"
+                value={format}
+                onChange={(e) => handleMetadataChange("format", e.target.value)}
+                className="w-full"
+              />
+            </div>
+
+            {/* Save metadata button */}
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSaveMetadata}
+                disabled={!isMetadataEdited || isSaving}
+                className="text-xs"
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {isSaving ? "Saving..." : "Save Metadata"}
+              </Button>
             </div>
 
             {/* Transcript field */}
@@ -360,9 +572,11 @@ the late 50's and 60's.`
               </div>
               <textarea
                 id="transcript-metadata"
+                ref={metadataTranscriptRef}
                 value={transcript}
                 onChange={handleTextChange}
                 onMouseUp={handleTextHighlight}
+                onClick={handleTranscriptClick}
                 onKeyUp={handleTextHighlight}
                 className="w-full h-64 p-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary font-sans text-sm"
                 placeholder="Transcript will appear here..."
@@ -426,9 +640,11 @@ the late 50's and 60's.`
               </div>
             </div>
             <textarea
+              ref={transcriptRef}
               value={transcript}
               onChange={handleTextChange}
               onMouseUp={handleTextHighlight}
+              onClick={handleTranscriptClick}
               onKeyUp={handleTextHighlight}
               className="w-full flex-1 p-4 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary font-sans text-sm"
               placeholder="Transcript will appear here..."

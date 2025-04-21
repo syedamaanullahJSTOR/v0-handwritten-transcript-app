@@ -11,15 +11,21 @@ interface DocumentPageProps {
   params: {
     id: string
   }
+  searchParams?: {
+    tab?: string
+  }
 }
 
-export default async function DocumentPage({ params }: DocumentPageProps) {
+export default async function DocumentPage({ params, searchParams = {} }: DocumentPageProps) {
   try {
     const document = await getDocumentById(params.id)
 
     if (!document) {
       notFound()
     }
+
+    // Get the active tab from search params or default to "metadata"
+    const activeTab = searchParams.tab || "metadata"
 
     return (
       <MainLayout>
@@ -74,7 +80,7 @@ export default async function DocumentPage({ params }: DocumentPageProps) {
           <div className="flex flex-1 overflow-hidden">
             {/* Transcript editor - left side (60%) */}
             <div className="w-[60%] border-r overflow-auto">
-              <TranscriptEditor document={document} />
+              <TranscriptEditor document={document} defaultTab={activeTab as "metadata" | "transcript"} />
             </div>
 
             {/* Document viewer - right side (40%) */}

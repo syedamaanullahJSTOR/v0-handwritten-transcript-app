@@ -11,6 +11,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: "Format parameter is required" }, { status: 400 })
     }
 
+    // Get the document from the database
     const document = await getDocumentById(id)
 
     if (!document) {
