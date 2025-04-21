@@ -5,18 +5,6 @@ import { generateTranscript } from "./ocr"
 import type { Document, TextMapItem } from "./types"
 import { createServerSupabaseClient } from "./supabase"
 
-// Fallback storage using base64 encoding
-async function storeAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      resolve(reader.result as string)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
 // Upload a document
 export async function uploadDocument(formData: FormData) {
   try {
@@ -25,49 +13,28 @@ export async function uploadDocument(formData: FormData) {
     const documentIds: string[] = []
 
     for (const file of files) {
-      let fileUrl: string
-      let storagePath: string
-
       // Generate a unique filename to avoid collisions
       const uniquePrefix = Date.now().toString() + "-" + Math.random().toString(36).substring(2, 9)
       const safeFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_")
       const fileName = `${uniquePrefix}-${safeFileName}`
 
-      // Always use base64 storage for now to avoid Supabase storage issues
       try {
-        console.log(`Storing file as base64: ${fileName}`)
-        fileUrl = await storeAsBase64(file)
+        // Get file data as ArrayBuffer
+        const arrayBuffer = await file.arrayBuffer()
+        const buffer = Buffer.from(arrayBuffer)
 
-        // Store a reference to the file instead of the full data URL
-        // This avoids issues with large data URLs in the database
-        storagePath = `base64:${uniquePrefix}-${safeFileName}`
+        // Convert to base64 string on the server side
+        const base64String = buffer.toString("base64")
+        const fileType = file.type || "application/octet-stream"
+        const dataUrl = `data:${fileType};base64,${base64String}`
 
-        console.log("File stored as base64")
-      } catch (storageError) {
-        console.error("Base64 storage failed:", storageError)
-        throw new Error(
-          `Failed to store file as base64: ${storageError instanceof Error ? storageError.message : String(storageError)}`,
-        )
-      }
-
-      // Insert file record in database
-      try {
-        // Create a temporary table in localStorage to store the actual data URL
-        // This is a workaround for the database size limitations
-        if (typeof window !== "undefined") {
-          try {
-            localStorage.setItem(`file_data_${uniquePrefix}`, fileUrl)
-          } catch (e) {
-            console.warn("Could not store file data in localStorage, it might be too large")
-          }
-        }
-
+        // Insert file record in database
         const { data: fileData, error: fileError } = await supabase
           .from("files")
           .insert({
             filename: file.name,
-            file_type: file.type || "application/octet-stream",
-            blob_id: storagePath, // Store the reference path, not the full data URL
+            file_type: fileType,
+            blob_id: dataUrl, // Store the complete data URL
             size: file.size,
           })
           .select()
@@ -84,10 +51,10 @@ export async function uploadDocument(formData: FormData) {
         documentIds.push(fileData.id)
 
         // Start processing in the background
-        processDocument(fileData.id, file, fileUrl)
-      } catch (dbError) {
-        console.error("Database error:", dbError)
-        throw dbError
+        processDocument(fileData.id, file, dataUrl)
+      } catch (error) {
+        console.error("Error processing file:", error)
+        throw error
       }
     }
 
@@ -212,21 +179,8 @@ export async function getDocuments(): Promise<Document[]> {
     const documents: Document[] = files.map((file) => {
       const transcript = file.transcripts && file.transcripts.length > 0 ? file.transcripts[0] : null
 
-      // Generate a placeholder URL for the document
-      // In a real app, you would retrieve the actual file content
-      let url = file.blob_id
-
-      // If this is a base64 reference, try to get it from localStorage
-      if (url.startsWith("base64:") && typeof window !== "undefined") {
-        const fileKey = `file_data_${url.split(":")[1]}`
-        const storedData = localStorage.getItem(fileKey)
-        if (storedData) {
-          url = storedData
-        } else {
-          // Fallback to a placeholder if the data isn't in localStorage
-          url = `/placeholder.svg?height=400&width=300&query=Document ${file.filename}`
-        }
-      }
+      // Use the blob_id directly as the URL
+      const url = file.blob_id
 
       return {
         id: file.id,
@@ -262,20 +216,8 @@ export async function getDocumentById(id: string): Promise<Document | null> {
       throw fileError
     }
 
-    // Generate a URL for the document
-    let url = file.blob_id
-
-    // If this is a base64 reference, try to get it from localStorage
-    if (url.startsWith("base64:") && typeof window !== "undefined") {
-      const fileKey = `file_data_${url.split(":")[1]}`
-      const storedData = localStorage.getItem(fileKey)
-      if (storedData) {
-        url = storedData
-      } else {
-        // Fallback to a placeholder if the data isn't in localStorage
-        url = `/placeholder.svg?height=400&width=300&query=Document ${file.filename}`
-      }
-    }
+    // Use the blob_id directly as the URL
+    const url = file.blob_id
 
     // Query the transcript
     const { data: transcript, error: transcriptError } = await supabase

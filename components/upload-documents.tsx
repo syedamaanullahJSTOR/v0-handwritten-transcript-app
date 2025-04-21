@@ -43,24 +43,7 @@ export function UploadDocuments() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      // Check file size before setting
-      const selectedFiles = Array.from(e.target.files)
-      const oversizedFiles = selectedFiles.filter((file) => file.size > 10 * 1024 * 1024) // 10MB limit
-
-      if (oversizedFiles.length > 0) {
-        toast({
-          title: "File size too large",
-          description: "Some files exceed the 10MB size limit. Please select smaller files.",
-          variant: "destructive",
-        })
-
-        // Filter out oversized files
-        const validFiles = selectedFiles.filter((file) => file.size <= 10 * 1024 * 1024)
-        setFiles(validFiles)
-      } else {
-        setFiles(selectedFiles)
-      }
-
+      setFiles(Array.from(e.target.files))
       setUploadError(null) // Clear any previous errors
       setUploadResult(null) // Reset upload result
     }
@@ -71,24 +54,7 @@ export function UploadDocuments() {
     e.stopPropagation()
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      // Check file size before setting
-      const selectedFiles = Array.from(e.dataTransfer.files)
-      const oversizedFiles = selectedFiles.filter((file) => file.size > 10 * 1024 * 1024) // 10MB limit
-
-      if (oversizedFiles.length > 0) {
-        toast({
-          title: "File size too large",
-          description: "Some files exceed the 10MB size limit. Please select smaller files.",
-          variant: "destructive",
-        })
-
-        // Filter out oversized files
-        const validFiles = selectedFiles.filter((file) => file.size <= 10 * 1024 * 1024)
-        setFiles(validFiles)
-      } else {
-        setFiles(selectedFiles)
-      }
-
+      setFiles(Array.from(e.dataTransfer.files))
       setUploadError(null)
       setUploadResult(null)
     }
@@ -153,7 +119,7 @@ export function UploadDocuments() {
         if (result.documentIds?.length > 0) {
           toast({
             title: "Upload completed with warnings",
-            description: "Files were uploaded using fallback storage. Redirecting to document view...",
+            description: "Files were uploaded with warnings. Redirecting to document view...",
             variant: "warning",
           })
 
@@ -209,9 +175,7 @@ export function UploadDocuments() {
             <AlertTitle>Upload Error</AlertTitle>
             <AlertDescription>
               {uploadError}
-              <div className="mt-2 text-sm">
-                Please try again with smaller files (under 10MB) or contact support if the issue persists.
-              </div>
+              <div className="mt-2 text-sm">Please try again or contact support if the issue persists.</div>
             </AlertDescription>
           </Alert>
         )}
@@ -244,7 +208,6 @@ export function UploadDocuments() {
                   <p className="text-sm font-medium">Drag and drop your files here or click to browse</p>
                   <p className="text-xs text-muted-foreground">
                     Text files (.txt, .md, .csv) and images (.jpg, .png) will be displayed in the document viewer.
-                    Maximum file size: 10MB.
                   </p>
                 </div>
                 <Input
