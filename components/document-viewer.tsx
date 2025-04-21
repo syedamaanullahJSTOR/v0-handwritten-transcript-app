@@ -17,7 +17,45 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   const [totalPages, setTotalPages] = useState(1) // Default to 1 page
   const [isImageLoaded, setIsImageLoaded] = useState(false)
   const [imageError, setImageError] = useState(false)
+  const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Create object URL for base64 PDFs
+  useEffect(() => {
+    // Clean up any previous object URL
+    if (pdfObjectUrl) {
+      URL.revokeObjectURL(pdfObjectUrl)
+      setPdfObjectUrl(null)
+    }
+
+    // If this is a PDF with a data URL, create an object URL for it
+    if (document.contentType === "application/pdf" && document.url.startsWith("data:")) {
+      try {
+        // Convert data URL to Blob
+        const byteString = atob(document.url.split(",")[1])
+        const mimeType = document.url.split(",")[0].split(":")[1].split(";")[0]
+        const ab = new ArrayBuffer(byteString.length)
+        const ia = new Uint8Array(ab)
+
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i)
+        }
+
+        const blob = new Blob([ab], { type: mimeType })
+        const objectUrl = URL.createObjectURL(blob)
+        setPdfObjectUrl(objectUrl)
+      } catch (error) {
+        console.error("Error creating object URL for PDF:", error)
+      }
+    }
+
+    // Cleanup function
+    return () => {
+      if (pdfObjectUrl) {
+        URL.revokeObjectURL(pdfObjectUrl)
+      }
+    }
+  }, [document.url, document.contentType])
 
   // Calculate total pages based on document content
   useEffect(() => {
@@ -104,7 +142,7 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
       try {
         // Create a simple anchor element to download the URL directly
         const a = document.createElement("a")
-        a.href = document.url
+        a.href = pdfObjectUrl || document.url
         a.download = document.name
         document.body.appendChild(a)
         a.click()
@@ -198,14 +236,33 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
 
     // For PDF content
     if (document.contentType === "application/pdf") {
-      // If it's a data URL, we need to handle it differently
-      if (document.url.startsWith("data:")) {
+      // Use the object URL if we created one for a base64 PDF
+      const pdfUrl = pdfObjectUrl || document.url
+
+      // If we have a valid URL to display
+      if (pdfUrl && !pdfUrl.includes("/placeholder.svg")) {
+        return (
+          <div className="w-full h-full flex items-center justify-center">
+            <iframe
+              src={`${pdfUrl}#page=${currentPage}&zoom=${zoom / 100}`}
+              title={document.name}
+              className="w-full h-full border-0"
+              style={{
+                transform: `rotate(${rotation}deg)`,
+                transformOrigin: "center",
+                transition: "transform 0.2s ease",
+              }}
+            />
+          </div>
+        )
+      } else {
+        // Fallback if we couldn't create a valid URL
         return (
           <div className="flex flex-col items-center justify-center p-8 text-center">
             <FileText className="h-16 w-16 text-gray-400 mb-4" />
             <h3 className="text-lg font-medium">PDF Preview Not Available</h3>
             <p className="text-sm text-muted-foreground mt-2">
-              PDF preview is not available for base64 encoded files. Please download the file to view it.
+              There was an error loading the PDF preview. Please download the file to view it.
             </p>
             <Button variant="outline" size="sm" className="mt-4" onClick={handleDownload}>
               <Download className="mr-2 h-4 w-4" />
@@ -214,21 +271,6 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
           </div>
         )
       }
-
-      return (
-        <div className="w-full h-full flex items-center justify-center">
-          <iframe
-            src={`${document.url}#page=${currentPage}&zoom=${zoom / 100}`}
-            title={document.name}
-            className="w-full h-full border-0"
-            style={{
-              transform: `rotate(${rotation}deg)`,
-              transformOrigin: "center",
-              transition: "transform 0.2s ease",
-            }}
-          />
-        </div>
-      )
     }
 
     // For text content (TXT, MD, CSV, etc.)
