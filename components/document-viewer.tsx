@@ -21,9 +21,7 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null)
   const [isLoadingPdf, setIsLoadingPdf] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
-
-  // Initialize PDF.js worker
-  // Remove the useEffect that calls initPdfWorker()
+  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   // Create object URL for base64 PDFs
   useEffect(() => {
@@ -110,6 +108,17 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
       window.removeEventListener("change-page" as any, handlePageChange)
     }
   }, [totalPages])
+
+  // Update iframe when page changes
+  useEffect(() => {
+    if (iframeRef.current && document.contentType === "application/pdf") {
+      // Force iframe to reload with new page parameter
+      const currentSrc = iframeRef.current.src
+      const baseUrl = currentSrc.split("#")[0]
+      const newSrc = `${baseUrl}#page=${currentPage}&view=FitH&pagemode=none`
+      iframeRef.current.src = newSrc
+    }
+  }, [currentPage, document.contentType])
 
   const handleZoomIn = () => {
     setZoom((prev) => Math.min(prev + 10, 200))
@@ -251,10 +260,14 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
 
       // If we have a valid URL to display
       if (pdfUrl && !pdfUrl.includes("/placeholder.svg")) {
+        // Add specific parameters to ensure single page view
+        const pdfViewerUrl = `${pdfUrl}#page=${currentPage}&view=FitH&pagemode=none`
+
         return (
           <div className="w-full h-full flex items-center justify-center">
             <iframe
-              src={`${pdfUrl}#page=${currentPage}&zoom=${zoom / 100}`}
+              ref={iframeRef}
+              src={pdfViewerUrl}
               title={document.name}
               className="w-full h-full border-0"
               style={{
