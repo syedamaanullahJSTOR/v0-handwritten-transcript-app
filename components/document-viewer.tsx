@@ -20,6 +20,7 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   const [imageError, setImageError] = useState(false)
   const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null)
   const [isLoadingPdf, setIsLoadingPdf] = useState(false)
+  const [pdfError, setPdfError] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
@@ -35,23 +36,38 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
     if (document.contentType === "application/pdf" && document.url.startsWith("data:")) {
       try {
         setIsLoadingPdf(true)
-        // Convert data URL to Blob
-        const byteString = atob(document.url.split(",")[1])
-        const mimeType = document.url.split(",")[0].split(":")[1].split(";")[0]
-        const ab = new ArrayBuffer(byteString.length)
-        const ia = new Uint8Array(ab)
+        setPdfError(false)
 
-        for (let i = 0; i < byteString.length; i++) {
-          ia[i] = byteString.charCodeAt(i)
+        // Convert data URL to Blob
+        const base64Data = document.url.split(",")[1]
+        if (!base64Data) {
+          throw new Error("Invalid data URL format")
         }
 
-        const blob = new Blob([ab], { type: mimeType })
+        const mimeType = document.url.split(",")[0].split(":")[1].split(";")[0]
+        const byteCharacters = atob(base64Data)
+        const byteArrays = []
+
+        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+          const slice = byteCharacters.slice(offset, offset + 512)
+          const byteNumbers = new Array(slice.length)
+
+          for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i)
+          }
+
+          const byteArray = new Uint8Array(byteNumbers)
+          byteArrays.push(byteArray)
+        }
+
+        const blob = new Blob(byteArrays, { type: mimeType })
         const objectUrl = URL.createObjectURL(blob)
         setPdfObjectUrl(objectUrl)
         setIsLoadingPdf(false)
       } catch (error) {
         console.error("Error creating object URL for PDF:", error)
         setIsLoadingPdf(false)
+        setPdfError(true)
       }
     }
 
@@ -66,11 +82,16 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   // Determine total pages
   useEffect(() => {
     const determineTotalPages = () => {
-      // Use our simplified fallback approach
+      // Use actual_pages from the document if available
+      if (document.actualPages && document.actualPages > 0) {
+        setTotalPages(document.actualPages)
+        return
+      }
+
+      // Otherwise use our fallback approach
       setTotalPages(getEstimatedPageCount(document))
     }
 
-    // No need for async/await here
     determineTotalPages()
   }, [document])
 
@@ -160,6 +181,27 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
         alert("Failed to download the file. Please try again.")
       }
     }
+  }
+
+  // Extract page number from transcript text position
+  const extractPageFromTranscript = (text: string, cursorPosition: number): number => {
+    // Find all "Page X" markers in the text
+    const pageMarkers = [...text.matchAll(/Page (\d+)/g)]
+    if (!pageMarkers.length) return 1
+
+    // Find which page section contains the cursor
+    let currentPageNum = 1
+    for (const match of pageMarkers) {
+      if (match.index !== undefined && match.index <= cursorPosition) {
+        if (match[1]) {
+          currentPageNum = Number.parseInt(match[1], 10)
+        }
+      } else {
+        break
+      }
+    }
+
+    return currentPageNum
   }
 
   // Determine what type of content to display
@@ -259,7 +301,7 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
       const pdfUrl = pdfObjectUrl || document.url
 
       // If we have a valid URL to display
-      if (pdfUrl && !pdfUrl.includes("/placeholder.svg")) {
+      if (pdfUrl && !pdfUrl.includes("/placeholder.svg") && !pdfError) {
         // Add specific parameters to ensure single page view
         const pdfViewerUrl = `${pdfUrl}#page=${currentPage}&view=FitH&pagemode=none`
 
@@ -275,17 +317,18 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
                 transformOrigin: "center",
                 transition: "transform 0.2s ease",
               }}
+              onError={() => setPdfError(true)}
             />
           </div>
         )
       } else {
-        // Fallback if we couldn't create a valid URL
+        // Fallback if we couldn't create a valid URL or there was an error
         return (
           <div className="flex flex-col items-center justify-center p-8 text-center">
             <FileText className="h-16 w-16 text-gray-400 mb-4" />
             <h3 className="text-lg font-medium">PDF Preview Not Available</h3>
             <p className="text-sm text-muted-foreground mt-2">
-              There was an error loading the PDF preview. Please download the file to view it.
+              PDF preview is not available for base64 encoded files. Please download the file to view it.
             </p>
             <Button variant="outline" size="sm" className="mt-4" onClick={handleDownload}>
               <Download className="mr-2 h-4 w-4" />

@@ -319,14 +319,14 @@ the late 50's and 60's.`
     }
   }
 
-  // Handle click in transcript to navigate to page
+  // Handle click or cursor movement in transcript to navigate to page
   const handleTranscriptClick = (e: React.MouseEvent<HTMLTextAreaElement>) => {
     const textarea = e.currentTarget
     const text = textarea.value
     const cursorPosition = textarea.selectionStart
 
     // Find the position of all "Page X" markers
-    const pageMarkers = [...text.matchAll(/Page (\\d+)/g)]
+    const pageMarkers = [...text.matchAll(/Page (\d+)/g)]
     if (!pageMarkers.length) return
 
     // Determine which page section the cursor is in
@@ -345,6 +345,40 @@ the late 50's and 60's.`
 
     // Dispatch event to change page in document viewer
     // The document viewer will validate if this page exists
+    const event = new CustomEvent("change-page", {
+      detail: { page: requestedPage },
+    })
+    window.dispatchEvent(event)
+  }
+
+  // Handle cursor movement to automatically sync with document viewer
+  const handleCursorMove = (e: React.MouseEvent<HTMLTextAreaElement> | React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const textarea = e.currentTarget
+    const text = textarea.value
+    const cursorPosition = textarea.selectionStart
+
+    // Only proceed if we have a valid cursor position
+    if (cursorPosition === null || cursorPosition === undefined) return
+
+    // Find the position of all "Page X" markers
+    const pageMarkers = [...text.matchAll(/Page (\d+)/g)]
+    if (!pageMarkers.length) return
+
+    // Determine which page section the cursor is in
+    let requestedPage = 1
+    for (const match of pageMarkers) {
+      if (match.index !== undefined && match.index <= cursorPosition) {
+        // Extract the page number from the match
+        if (match[1]) {
+          requestedPage = Number.parseInt(match[1], 10)
+        }
+      } else {
+        // We've gone past the cursor position, so stop
+        break
+      }
+    }
+
+    // Dispatch event to change page in document viewer
     const event = new CustomEvent("change-page", {
       detail: { page: requestedPage },
     })
@@ -577,7 +611,11 @@ the late 50's and 60's.`
                 onChange={handleTextChange}
                 onMouseUp={handleTextHighlight}
                 onClick={handleTranscriptClick}
-                onKeyUp={handleTextHighlight}
+                onKeyUp={(e) => {
+                  handleTextHighlight()
+                  handleCursorMove(e)
+                }}
+                onMouseMove={handleCursorMove}
                 className="w-full h-64 p-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary font-sans text-sm"
                 placeholder="Transcript will appear here..."
               />
@@ -645,7 +683,11 @@ the late 50's and 60's.`
               onChange={handleTextChange}
               onMouseUp={handleTextHighlight}
               onClick={handleTranscriptClick}
-              onKeyUp={handleTextHighlight}
+              onKeyUp={(e) => {
+                handleTextHighlight()
+                handleCursorMove(e)
+              }}
+              onMouseMove={handleCursorMove}
               className="w-full flex-1 p-4 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary font-sans text-sm"
               placeholder="Transcript will appear here..."
               style={{ minHeight: "calc(100vh - 300px)" }}
