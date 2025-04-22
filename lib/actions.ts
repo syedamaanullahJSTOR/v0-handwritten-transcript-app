@@ -2,9 +2,9 @@
 
 import { revalidatePath } from "next/cache"
 import { generateTranscript } from "./ocr"
+import { generateTranscriptWithAI, enhanceTranscriptWithAI } from "./openai-service"
 import type { Document, TextMapItem } from "./types"
 import { createServerSupabaseClient } from "./supabase"
-import { getServerPdfPageCount } from "./server-pdf-utils"
 
 // Upload a document
 export async function uploadDocument(formData: FormData) {
@@ -23,12 +23,6 @@ export async function uploadDocument(formData: FormData) {
         // Get file data as ArrayBuffer
         const arrayBuffer = await file.arrayBuffer()
         const buffer = Buffer.from(arrayBuffer)
-
-        // Determine actual page count for PDFs
-        let actualPages = 1
-        if (file.type === "application/pdf") {
-          actualPages = await getServerPdfPageCount(buffer)
-        }
 
         // Convert to base64 string on the server side
         const base64String = buffer.toString("base64")
@@ -58,7 +52,7 @@ export async function uploadDocument(formData: FormData) {
         documentIds.push(fileData.id)
 
         // Start processing in the background
-        processDocument(fileData.id, file, dataUrl, actualPages)
+        processDocument(fileData.id, file, dataUrl)
       } catch (error) {
         console.error("Error processing file:", error)
         throw error
@@ -83,22 +77,73 @@ export async function uploadDocument(formData: FormData) {
 }
 
 // Process a document to generate transcript
-async function processDocument(id: string, file: File, fileUrl: string, actualPages = 1) {
+async function processDocument(id: string, file: File, fileUrl: string) {
   try {
     const supabase = createServerSupabaseClient()
 
-    // 1. Generate transcript
-    const { transcript, textMap } = await generateTranscript(file)
-
-    // 2. Insert transcript record
-    const { data: transcriptData, error: transcriptError } = await supabase
+    // Update status to processing
+    await supabase
       .from("transcripts")
       .insert({
+        file_id: id,
+        content: "Processing...",
+        status: "processing",
+      })
+      .select()
+
+    // Use OpenAI to generate transcript if API key is available
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        // Generate transcript with OpenAI
+        const { transcript, confidence } = await generateTranscriptWithAI(id, fileUrl, file.name, file.type)
+
+        // Insert transcript record
+        const { data: transcriptData, error: transcriptError } = await supabase
+          .from("transcripts")
+          .upsert({
+            file_id: id,
+            content: transcript,
+            original_content: transcript, // Store original for revert functionality
+            status: "completed",
+            confidence: confidence,
+          })
+          .select()
+          .single()
+
+        if (transcriptError) {
+          throw new Error(`Failed to insert transcript: ${transcriptError.message}`)
+        }
+
+        // Create empty metadata record
+        const { error: metadataError } = await supabase.from("transcript_metadata").insert({
+          transcript_id: transcriptData.id,
+          title: file.name.split(".")[0],
+        })
+
+        if (metadataError) {
+          console.error("Failed to insert metadata record:", metadataError)
+        }
+
+        revalidatePath("/")
+        revalidatePath(`/documents/${id}`)
+        return
+      } catch (aiError) {
+        console.error("Error using OpenAI for transcript generation:", aiError)
+        // Fall back to OCR if OpenAI fails
+      }
+    }
+
+    // Fallback to OCR if OpenAI is not available or fails
+    const { transcript, textMap } = await generateTranscript(file)
+
+    // Insert transcript record
+    const { data: transcriptData, error: transcriptError } = await supabase
+      .from("transcripts")
+      .upsert({
         file_id: id,
         content: transcript,
         original_content: transcript, // Store original for revert functionality
         status: "completed",
-        actual_pages: actualPages, // Store the actual page count
       })
       .select()
       .single()
@@ -107,7 +152,7 @@ async function processDocument(id: string, file: File, fileUrl: string, actualPa
       throw new Error(`Failed to insert transcript: ${transcriptError.message}`)
     }
 
-    // 3. Insert text map records
+    // Insert text map records
     if (textMap && textMap.length > 0) {
       const textMapRecords = textMap.map((item) => ({
         transcript_id: transcriptData.id,
@@ -126,7 +171,7 @@ async function processDocument(id: string, file: File, fileUrl: string, actualPa
       }
     }
 
-    // 4. Create empty metadata record
+    // Create empty metadata record
     const { error: metadataError } = await supabase.from("transcript_metadata").insert({
       transcript_id: transcriptData.id,
       title: file.name.split(".")[0],
@@ -144,7 +189,11 @@ async function processDocument(id: string, file: File, fileUrl: string, actualPa
     const supabase = createServerSupabaseClient()
 
     // Update status to failed
-    const { error: updateError } = await supabase.from("transcripts").update({ status: "failed" }).eq("file_id", id)
+    const { error: updateError } = await supabase.from("transcripts").upsert({
+      file_id: id,
+      status: "failed",
+      content: "Failed to generate transcript. Please try again.",
+    })
 
     if (updateError) {
       console.error("Failed to update transcript status:", updateError)
@@ -152,6 +201,90 @@ async function processDocument(id: string, file: File, fileUrl: string, actualPa
 
     revalidatePath("/")
     revalidatePath(`/documents/${id}`)
+  }
+}
+
+// Enhance transcript with AI
+export async function enhanceTranscript(id: string) {
+  try {
+    const supabase = createServerSupabaseClient()
+
+    // Get the document
+    const document = await getDocumentById(id)
+    if (!document) {
+      console.error("Document not found for ID:", id)
+      throw new Error("Document not found")
+    }
+
+    // If there's no transcript ID but we have transcript content, create a new transcript record
+    if (!document.transcriptId) {
+      console.log("No transcript ID found for document:", id)
+
+      if (!document.transcript) {
+        console.error("No transcript content found for document:", id)
+        throw new Error("No transcript content found")
+      }
+
+      console.log("Creating new transcript record for document:", id)
+
+      // Create new transcript record
+      const { data: transcriptData, error: transcriptError } = await supabase
+        .from("transcripts")
+        .insert({
+          file_id: id,
+          content: document.transcript,
+          original_content: document.transcript,
+          status: "completed",
+        })
+        .select()
+        .single()
+
+      if (transcriptError) {
+        console.error("Error creating transcript record:", transcriptError)
+        throw new Error("Failed to create transcript record")
+      }
+
+      // Update document with new transcript ID
+      document.transcriptId = transcriptData.id
+      console.log("Created new transcript record with ID:", document.transcriptId)
+    }
+
+    // Update status to processing
+    await supabase
+      .from("transcripts")
+      .update({
+        status: "processing",
+      })
+      .eq("id", document.transcriptId)
+
+    // Enhance the transcript with AI
+    const enhancedTranscript = await enhanceTranscriptWithAI(document)
+
+    // Update the transcript
+    const { error } = await supabase
+      .from("transcripts")
+      .update({
+        content: enhancedTranscript,
+        updated_at: new Date().toISOString(),
+        status: "completed",
+      })
+      .eq("id", document.transcriptId)
+
+    if (error) throw error
+
+    // Add a version record
+    await supabase.from("transcript_versions").insert({
+      transcript_id: document.transcriptId,
+      content: enhancedTranscript,
+      created_by: "AI Enhancement",
+    })
+
+    revalidatePath(`/documents/${id}`)
+
+    return { success: true }
+  } catch (error) {
+    console.error("Error enhancing transcript with AI:", error)
+    throw error
   }
 }
 
@@ -174,10 +307,10 @@ export async function getDocuments(): Promise<Document[]> {
           id,
           content,
           status,
+          confidence,
           created_at,
           updated_at,
-          original_content,
-          actual_pages
+          original_content
         )
       `)
       .order("created_at", { ascending: false })
@@ -202,7 +335,7 @@ export async function getDocuments(): Promise<Document[]> {
         createdAt: file.created_at,
         updatedAt: transcript?.updated_at || file.created_at,
         transcriptId: transcript?.id,
-        actualPages: transcript?.actual_pages || 1,
+        confidence: transcript?.confidence || null,
       }
     })
 
@@ -283,17 +416,14 @@ export async function getDocumentById(id: string): Promise<Document | null> {
       }
     }
 
-    // Determine the number of pages from transcript content
-    let transcriptPageCount = 1
+    // Determine the number of pages
+    let pages = 1
     if (transcript?.content) {
       const pageMatches = transcript.content.match(/Page \d+/g)
       if (pageMatches && pageMatches.length > 0) {
-        transcriptPageCount = pageMatches.length
+        pages = pageMatches.length
       }
     }
-
-    // Use actual_pages if available, otherwise fall back to transcript page count
-    const actualPages = transcript?.actual_pages || 1
 
     // Construct the document object
     const document: Document = {
@@ -309,8 +439,8 @@ export async function getDocumentById(id: string): Promise<Document | null> {
       textMap,
       transcriptId: transcript?.id,
       metadata,
-      pages: transcriptPageCount, // Number of page markers in transcript
-      actualPages, // Actual number of pages in the document
+      pages,
+      confidence: transcript?.confidence || null,
     }
 
     return document
@@ -364,6 +494,19 @@ export async function saveTranscript(id: string, transcript: string) {
         .single()
 
       if (error) throw error
+
+      // Create empty metadata record if it doesn't exist
+      if (data) {
+        const { error: metadataError } = await supabase.from("transcript_metadata").insert({
+          transcript_id: data.id,
+          title: document.name.split(".")[0] || "",
+        })
+
+        if (metadataError && metadataError.code !== "23505") {
+          // Ignore unique constraint violations
+          console.error("Error creating metadata record:", metadataError)
+        }
+      }
     }
 
     revalidatePath(`/documents/${id}`)

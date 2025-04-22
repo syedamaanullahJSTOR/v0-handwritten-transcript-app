@@ -4,7 +4,6 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { ZoomIn, ZoomOut, RotateCw, Maximize, ChevronLeft, ChevronRight, FileText, Download } from "lucide-react"
 import type { Document } from "@/lib/types"
-import { getEstimatedPageCount } from "@/lib/fallback-pdf-utils"
 
 interface DocumentViewerProps {
   document: Document
@@ -18,81 +17,32 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   const [totalPages, setTotalPages] = useState(1) // Default to 1 page
   const [isImageLoaded, setIsImageLoaded] = useState(false)
   const [imageError, setImageError] = useState(false)
-  const [pdfObjectUrl, setPdfObjectUrl] = useState<string | null>(null)
-  const [isLoadingPdf, setIsLoadingPdf] = useState(false)
-  const [pdfError, setPdfError] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
 
-  // Create object URL for base64 PDFs
+  // Calculate total pages based on document content
   useEffect(() => {
-    // Clean up any previous object URL
-    if (pdfObjectUrl) {
-      URL.revokeObjectURL(pdfObjectUrl)
-      setPdfObjectUrl(null)
+    // Check if document has pages metadata
+    if (document.pages) {
+      setTotalPages(document.pages)
     }
-
-    // If this is a PDF with a data URL, create an object URL for it
-    if (document.contentType === "application/pdf" && document.url.startsWith("data:")) {
-      try {
-        setIsLoadingPdf(true)
-        setPdfError(false)
-
-        // Convert data URL to Blob
-        const base64Data = document.url.split(",")[1]
-        if (!base64Data) {
-          throw new Error("Invalid data URL format")
-        }
-
-        const mimeType = document.url.split(",")[0].split(":")[1].split(";")[0]
-        const byteCharacters = atob(base64Data)
-        const byteArrays = []
-
-        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-          const slice = byteCharacters.slice(offset, offset + 512)
-          const byteNumbers = new Array(slice.length)
-
-          for (let i = 0; i < slice.length; i++) {
-            byteNumbers[i] = slice.charCodeAt(i)
-          }
-
-          const byteArray = new Uint8Array(byteNumbers)
-          byteArrays.push(byteArray)
-        }
-
-        const blob = new Blob(byteArrays, { type: mimeType })
-        const objectUrl = URL.createObjectURL(blob)
-        setPdfObjectUrl(objectUrl)
-        setIsLoadingPdf(false)
-      } catch (error) {
-        console.error("Error creating object URL for PDF:", error)
-        setIsLoadingPdf(false)
-        setPdfError(true)
+    // For documents with textMap, use that to determine pages
+    else if (document.textMap && document.textMap.length > 0) {
+      // Find the highest page number in the text map
+      const maxPage = Math.max(...document.textMap.map((item) => item.page || 1))
+      setTotalPages(maxPage)
+    }
+    // Check for "Page X" markers in the transcript
+    else if (document.transcript) {
+      const pageMatches = document.transcript.match(/Page \d+/g)
+      if (pageMatches && pageMatches.length > 0) {
+        setTotalPages(pageMatches.length)
+      } else {
+        // Fallback: estimate based on transcript length
+        const transcriptLength = document.transcript.length
+        const estimatedPages = Math.max(1, Math.ceil(transcriptLength / 3000))
+        setTotalPages(estimatedPages)
       }
     }
-
-    // Cleanup function
-    return () => {
-      if (pdfObjectUrl) {
-        URL.revokeObjectURL(pdfObjectUrl)
-      }
-    }
-  }, [document.url, document.contentType])
-
-  // Determine total pages
-  useEffect(() => {
-    const determineTotalPages = () => {
-      // Use actual_pages from the document if available
-      if (document.actualPages && document.actualPages > 0) {
-        setTotalPages(document.actualPages)
-        return
-      }
-
-      // Otherwise use our fallback approach
-      setTotalPages(getEstimatedPageCount(document))
-    }
-
-    determineTotalPages()
   }, [document])
 
   // Listen for highlight events from the transcript editor
@@ -112,14 +62,8 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
   useEffect(() => {
     const handlePageChange = (event: CustomEvent) => {
       const { page } = event.detail
-      // Only change page if it's within the valid range of the actual document
       if (page >= 1 && page <= totalPages) {
         setCurrentPage(page)
-      }
-      // Otherwise, log a warning but don't change the page
-      else if (page > totalPages) {
-        console.warn(`Requested page ${page} exceeds document page count (${totalPages})`)
-        // Don't change the page - stay on current page
       }
     }
 
@@ -129,17 +73,6 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
       window.removeEventListener("change-page" as any, handlePageChange)
     }
   }, [totalPages])
-
-  // Update iframe when page changes
-  useEffect(() => {
-    if (iframeRef.current && document.contentType === "application/pdf") {
-      // Force iframe to reload with new page parameter
-      const currentSrc = iframeRef.current.src
-      const baseUrl = currentSrc.split("#")[0]
-      const newSrc = `${baseUrl}#page=${currentPage}&view=FitH&pagemode=none`
-      iframeRef.current.src = newSrc
-    }
-  }, [currentPage, document.contentType])
 
   const handleZoomIn = () => {
     setZoom((prev) => Math.min(prev + 10, 200))
@@ -171,7 +104,7 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
       try {
         // Create a simple anchor element to download the URL directly
         const a = document.createElement("a")
-        a.href = pdfObjectUrl || document.url
+        a.href = document.url
         a.download = document.name
         document.body.appendChild(a)
         a.click()
@@ -183,40 +116,8 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
     }
   }
 
-  // Extract page number from transcript text position
-  const extractPageFromTranscript = (text: string, cursorPosition: number): number => {
-    // Find all "Page X" markers in the text
-    const pageMarkers = [...text.matchAll(/Page (\d+)/g)]
-    if (!pageMarkers.length) return 1
-
-    // Find which page section contains the cursor
-    let currentPageNum = 1
-    for (const match of pageMarkers) {
-      if (match.index !== undefined && match.index <= cursorPosition) {
-        if (match[1]) {
-          currentPageNum = Number.parseInt(match[1], 10)
-        }
-      } else {
-        break
-      }
-    }
-
-    return currentPageNum
-  }
-
   // Determine what type of content to display
   const renderDocumentContent = () => {
-    // Show loading indicator while PDF is being processed
-    if (isLoadingPdf) {
-      return (
-        <div className="flex flex-col items-center justify-center p-8 text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mb-4"></div>
-          <h3 className="text-lg font-medium">Loading PDF...</h3>
-          <p className="text-sm text-muted-foreground mt-2">Please wait while we process the document.</p>
-        </div>
-      )
-    }
-
     // Check if we have a placeholder URL (meaning the actual file data is not available)
     if (document.url.includes("/placeholder.svg")) {
       return (
@@ -297,32 +198,8 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
 
     // For PDF content
     if (document.contentType === "application/pdf") {
-      // Use the object URL if we created one for a base64 PDF
-      const pdfUrl = pdfObjectUrl || document.url
-
-      // If we have a valid URL to display
-      if (pdfUrl && !pdfUrl.includes("/placeholder.svg") && !pdfError) {
-        // Add specific parameters to ensure single page view
-        const pdfViewerUrl = `${pdfUrl}#page=${currentPage}&view=FitH&pagemode=none`
-
-        return (
-          <div className="w-full h-full flex items-center justify-center">
-            <iframe
-              ref={iframeRef}
-              src={pdfViewerUrl}
-              title={document.name}
-              className="w-full h-full border-0"
-              style={{
-                transform: `rotate(${rotation}deg)`,
-                transformOrigin: "center",
-                transition: "transform 0.2s ease",
-              }}
-              onError={() => setPdfError(true)}
-            />
-          </div>
-        )
-      } else {
-        // Fallback if we couldn't create a valid URL or there was an error
+      // If it's a data URL, we need to handle it differently
+      if (document.url.startsWith("data:")) {
         return (
           <div className="flex flex-col items-center justify-center p-8 text-center">
             <FileText className="h-16 w-16 text-gray-400 mb-4" />
@@ -337,6 +214,21 @@ export function DocumentViewer({ document }: DocumentViewerProps) {
           </div>
         )
       }
+
+      return (
+        <div className="w-full h-full flex items-center justify-center">
+          <iframe
+            src={`${document.url}#page=${currentPage}&zoom=${zoom / 100}`}
+            title={document.name}
+            className="w-full h-full border-0"
+            style={{
+              transform: `rotate(${rotation}deg)`,
+              transformOrigin: "center",
+              transition: "transform 0.2s ease",
+            }}
+          />
+        </div>
+      )
     }
 
     // For text content (TXT, MD, CSV, etc.)

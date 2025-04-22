@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getDocumentById } from "@/lib/actions"
-import { convertToVtt, convertToAlto, convertToHocr, convertToTxt } from "@/lib/converters"
+import { convertToVtt, convertToHocr, convertToTxt, convertToDoc } from "@/lib/converters"
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -32,10 +32,10 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
         contentType = "text/vtt"
         filename = `${document.name.split(".")[0]}.vtt`
         break
-      case "alto":
-        content = await convertToAlto(document)
-        contentType = "application/xml"
-        filename = `${document.name.split(".")[0]}.xml`
+      case "doc":
+        content = await convertToDoc(document)
+        contentType = "application/msword"
+        filename = `${document.name.split(".")[0]}.doc`
         break
       case "hocr":
         content = await convertToHocr(document)

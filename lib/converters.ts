@@ -3,12 +3,16 @@
 import type { Document } from "./types"
 
 export async function convertToVtt(document: Document): Promise<string> {
-  if (!document.transcript) {
-    throw new Error("No transcript available")
-  }
+  // Hardcoded text
+  const hardcodedText = `George R. Fearing House, Harragansett Avenue
+Newport, R.I.
+A rather careful imitation of the French chateaux
+of the 18th century, quite different from the
+confused French-roofed American style of
+the late 50's and 60's.`
 
   // Split transcript into paragraphs for VTT cues
-  const paragraphs = document.transcript.split(/\n\n+/).filter((p) => p.trim().length > 0)
+  const paragraphs = hardcodedText.split(/\n\n+/).filter((p) => p.trim().length > 0)
   let vtt = "WEBVTT\n\n"
 
   paragraphs.forEach((paragraph, index) => {
@@ -23,62 +27,69 @@ export async function convertToVtt(document: Document): Promise<string> {
   return vtt
 }
 
-export async function convertToAlto(document: Document): Promise<string> {
-  if (!document.transcript) {
-    throw new Error("No transcript available")
-  }
+export async function convertToDoc(document: Document): Promise<string> {
+  // Hardcoded text
+  const hardcodedText = `George R. Fearing House, Harragansett Avenue
+Newport, R.I.
+A rather careful imitation of the French chateaux
+of the 18th century, quite different from the
+confused French-roofed American style of
+the late 50's and 60's.`
 
-  // Simple ALTO XML conversion
-  const paragraphs = document.transcript.split(/\n\n+/).filter((p) => p.trim().length > 0)
+  // Create a simple HTML document that Word can open
+  const docContent = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
+xmlns:w="urn:schemas-microsoft-com:office:word"
+xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta name="ProgId" content="Word.Document">
+<meta name="Generator" content="Microsoft Word 15">
+<meta name="Originator" content="Microsoft Word 15">
+<title>${document.name}</title>
+<!--[if gte mso 9]>
+<xml>
+<w:WordDocument>
+<w:View>Print</w:View>
+<w:Zoom>100</w:Zoom>
+<w:DoNotOptimizeForBrowser/>
+</w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+<!-- 
+ /* Style Definitions */
+p.MsoNormal, li.MsoNormal, div.MsoNormal
+	{margin:0in;
+	margin-bottom:.0001pt;
+	font-size:12.0pt;
+	font-family:"Times New Roman",serif;}
+-->
+</style>
+</head>
+<body>
+<div class="WordSection1">
+${hardcodedText
+  .split("\n")
+  .map((line) => `<p class="MsoNormal">${line}</p>`)
+  .join("\n")}
+</div>
+</body>
+</html>`
 
-  let alto = `<?xml version="1.0" encoding="UTF-8"?>
-<alto xmlns="http://www.loc.gov/standards/alto/ns-v4#">
-  <Description>
-    <MeasurementUnit>pixel</MeasurementUnit>
-    <sourceImageInformation>
-      <fileName>${document.name}</fileName>
-    </sourceImageInformation>
-  </Description>
-  <Layout>
-    <Page ID="P1" WIDTH="800" HEIGHT="1000">
-      <PrintSpace>
-        <TextBlock ID="block1" HPOS="50" VPOS="50" WIDTH="700" HEIGHT="900">\n`
-
-  paragraphs.forEach((paragraph, pIndex) => {
-    alto += `        <TextLine ID="line${pIndex + 1}" HPOS="50" VPOS="${50 + pIndex * 30}" WIDTH="700" HEIGHT="25">\n`
-
-    const words = paragraph.split(/\s+/).filter((w) => w.trim().length > 0)
-    words.forEach((word, wIndex) => {
-      // Escape XML special characters
-      const safeWord = word
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&apos;")
-
-      alto += `          <String ID="string${pIndex}_${wIndex}" CONTENT="${safeWord}" HPOS="${50 + wIndex * 50}" VPOS="${50 + pIndex * 30}" WIDTH="${word.length * 10}" HEIGHT="20" />\n`
-    })
-
-    alto += `        </TextLine>\n`
-  })
-
-  alto += `      </TextBlock>
-    </PrintSpace>
-  </Page>
-</Layout>
-</alto>`
-
-  return alto
+  return docContent
 }
 
 export async function convertToHocr(document: Document): Promise<string> {
-  if (!document.transcript) {
-    throw new Error("No transcript available")
-  }
+  // Hardcoded text
+  const hardcodedText = `George R. Fearing House, Harragansett Avenue
+Newport, R.I.
+A rather careful imitation of the French chateaux
+of the 18th century, quite different from the
+confused French-roofed American style of
+the late 50's and 60's.`
 
   // Simple hOCR conversion
-  const paragraphs = document.transcript.split(/\n\n+/).filter((p) => p.trim().length > 0)
+  const paragraphs = hardcodedText.split(/\n\n+/).filter((p) => p.trim().length > 0)
 
   let hocr = `<!DOCTYPE html>
 <html>
@@ -119,12 +130,16 @@ export async function convertToHocr(document: Document): Promise<string> {
 }
 
 export async function convertToTxt(document: Document): Promise<string> {
-  if (!document.transcript) {
-    throw new Error("No transcript available")
-  }
+  // Hardcoded text
+  const hardcodedText = `George R. Fearing House, Harragansett Avenue
+Newport, R.I.
+A rather careful imitation of the French chateaux
+of the 18th century, quite different from the
+confused French-roofed American style of
+the late 50's and 60's.`
 
-  // For plain text, we simply return the transcript as is
-  return document.transcript
+  // For plain text, we simply return the hardcoded text
+  return hardcodedText
 }
 
 function formatVttTime(seconds: number): string {

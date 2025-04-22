@@ -7,9 +7,9 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Download, RotateCcw, Save, Info } from "lucide-react"
+import { Download, RotateCcw, Save, Info, Sparkles } from "lucide-react"
 import type { Document } from "@/lib/types"
-import { saveTranscript, revertTranscript, saveMetadata } from "@/lib/actions"
+import { saveTranscript, revertTranscript, saveMetadata, enhanceTranscript } from "@/lib/actions"
 import { useToast } from "@/hooks/use-toast"
 
 interface TranscriptEditorProps {
@@ -44,6 +44,7 @@ export function TranscriptEditor({ document: docData, defaultTab = "metadata" }:
   const [isMetadataEdited, setIsMetadataEdited] = useState(false)
 
   const [isSaving, setIsSaving] = useState(false)
+  const [isEnhancing, setIsEnhancing] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const transcriptRef = useRef<HTMLTextAreaElement>(null)
   const metadataTranscriptRef = useRef<HTMLTextAreaElement>(null)
@@ -51,50 +52,18 @@ export function TranscriptEditor({ document: docData, defaultTab = "metadata" }:
 
   // Initialize transcript state when component mounts or document changes
   useEffect(() => {
-    // Hardcoded default text with page markers
-    const defaultText = `Page 1
-
-George R. Fearing House, Harragansett Avenue
-Newport, R.I.
-A rather careful imitation of the French chateaux
-of the 18th century, quite different from the
-confused French-roofed American style of
-the late 50's and 60's.
-
-Page 2
-
-George R. Fearing House, Harragansett Avenue
-Newport, R.I.
-A rather careful imitation of the French chateaux
-of the 18th century, quite different from the
-confused French-roofed American style of
-the late 50's and 60's.
-
-Page 3
-
-George R. Fearing House, Harragansett Avenue
-Newport, R.I.
-A rather careful imitation of the French chateaux
-of the 18th century, quite different from the
-confused French-roofed American style of
-the late 50's and 60's.
-
-Page 4
-
-George R. Fearing House, Harragansett Avenue
+    // Hardcoded text as requested
+    const hardcodedText = `George R. Fearing House, Harragansett Avenue
 Newport, R.I.
 A rather careful imitation of the French chateaux
 of the 18th century, quite different from the
 confused French-roofed American style of
 the late 50's and 60's.`
 
-    // Set the transcript text from document or use default
-    const transcriptText = docData.transcript || defaultText
-
-    // Initialize all three transcript states
-    setTranscript(transcriptText)
-    setSavedTranscript(transcriptText)
-    setOriginalTranscript(docData.originalTranscript || transcriptText)
+    // Initialize all three transcript states with the hardcoded text
+    setTranscript(hardcodedText)
+    setSavedTranscript(hardcodedText)
+    setOriginalTranscript(hardcodedText)
 
     // Initialize metadata fields
     if (docData.metadata) {
@@ -210,6 +179,57 @@ the late 50's and 60's.`
     }
   }
 
+  // Enhance transcript with AI
+  const handleEnhanceWithAI = async () => {
+    setIsEnhancing(true)
+
+    try {
+      toast({
+        title: "Enhancing transcript with AI",
+        description: "This may take a moment...",
+      })
+
+      // First, make sure we have a transcript to enhance
+      if (!transcript || transcript.trim() === "") {
+        throw new Error("No transcript content to enhance")
+      }
+
+      // If the transcript hasn't been saved yet, save it first
+      if (isEdited) {
+        await saveTranscript(docData.id, transcript)
+        toast({
+          title: "Transcript saved",
+          description: "Your changes have been saved before enhancement.",
+        })
+      }
+
+      // Now enhance the transcript
+      await enhanceTranscript(docData.id)
+
+      // Show success message
+      toast({
+        title: "Transcript enhanced",
+        description: "The transcript has been enhanced with AI. Refreshing page to show updates...",
+      })
+
+      // Refresh the page to get the updated transcript
+      setTimeout(() => {
+        window.location.reload()
+      }, 1500)
+    } catch (error) {
+      console.error("Error enhancing transcript:", error)
+
+      toast({
+        title: "Failed to enhance transcript",
+        description:
+          error instanceof Error ? error.message : "There was an error enhancing the transcript. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsEnhancing(false)
+    }
+  }
+
   // Save metadata changes
   const handleSaveMetadata = async () => {
     if (!isMetadataEdited) return
@@ -319,58 +339,24 @@ the late 50's and 60's.`
     }
   }
 
-  // Handle click or cursor movement in transcript to navigate to page
+  // Handle click in transcript to navigate to page
   const handleTranscriptClick = (e: React.MouseEvent<HTMLTextAreaElement>) => {
     const textarea = e.currentTarget
     const text = textarea.value
     const cursorPosition = textarea.selectionStart
 
     // Find the position of all "Page X" markers
-    const pageMarkers = [...text.matchAll(/Page (\d+)/g)]
+    const pageMarkers = [...text.matchAll(/Page \d+/g)]
     if (!pageMarkers.length) return
 
     // Determine which page section the cursor is in
-    let requestedPage = 1
+    let currentPage = 1
     for (const match of pageMarkers) {
       if (match.index !== undefined && match.index <= cursorPosition) {
         // Extract the page number from the match
-        if (match[1]) {
-          requestedPage = Number.parseInt(match[1], 10)
-        }
-      } else {
-        // We've gone past the cursor position, so stop
-        break
-      }
-    }
-
-    // Dispatch event to change page in document viewer
-    // The document viewer will validate if this page exists
-    const event = new CustomEvent("change-page", {
-      detail: { page: requestedPage },
-    })
-    window.dispatchEvent(event)
-  }
-
-  // Handle cursor movement to automatically sync with document viewer
-  const handleCursorMove = (e: React.MouseEvent<HTMLTextAreaElement> | React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const textarea = e.currentTarget
-    const text = textarea.value
-    const cursorPosition = textarea.selectionStart
-
-    // Only proceed if we have a valid cursor position
-    if (cursorPosition === null || cursorPosition === undefined) return
-
-    // Find the position of all "Page X" markers
-    const pageMarkers = [...text.matchAll(/Page (\d+)/g)]
-    if (!pageMarkers.length) return
-
-    // Determine which page section the cursor is in
-    let requestedPage = 1
-    for (const match of pageMarkers) {
-      if (match.index !== undefined && match.index <= cursorPosition) {
-        // Extract the page number from the match
-        if (match[1]) {
-          requestedPage = Number.parseInt(match[1], 10)
+        const pageMatch = match[0].match(/\d+/)
+        if (pageMatch) {
+          currentPage = Number.parseInt(pageMatch[0], 10)
         }
       } else {
         // We've gone past the cursor position, so stop
@@ -380,7 +366,7 @@ the late 50's and 60's.`
 
     // Dispatch event to change page in document viewer
     const event = new CustomEvent("change-page", {
-      detail: { page: requestedPage },
+      detail: { page: currentPage },
     })
     window.dispatchEvent(event)
   }
@@ -559,6 +545,16 @@ the late 50's and 60's.`
                   <Info className="h-4 w-4 ml-2 text-gray-400" />
                 </div>
                 <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleEnhanceWithAI}
+                    disabled={isEnhancing}
+                    className="text-xs"
+                  >
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    {isEnhancing ? "Enhancing..." : "Enhance with AI"}
+                  </Button>
                   {isOriginalModified && (
                     <Button variant="outline" size="sm" onClick={handleRevert} className="text-xs">
                       <RotateCcw className="mr-2 h-4 w-4" />
@@ -598,7 +594,7 @@ the late 50's and 60's.`
                       <option value="">Select format</option>
                       <option value="txt">TXT</option>
                       <option value="vtt">VTT</option>
-                      <option value="alto">ALTO</option>
+                      <option value="doc">DOC</option>
                       <option value="hocr">hOCR</option>
                     </select>
                   </div>
@@ -611,11 +607,7 @@ the late 50's and 60's.`
                 onChange={handleTextChange}
                 onMouseUp={handleTextHighlight}
                 onClick={handleTranscriptClick}
-                onKeyUp={(e) => {
-                  handleTextHighlight()
-                  handleCursorMove(e)
-                }}
-                onMouseMove={handleCursorMove}
+                onKeyUp={handleTextHighlight}
                 className="w-full h-64 p-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary font-sans text-sm"
                 placeholder="Transcript will appear here..."
               />
@@ -632,6 +624,16 @@ the late 50's and 60's.`
                 <div className="text-xs text-gray-500 ml-2">Confidence: Medium</div>
               </div>
               <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleEnhanceWithAI}
+                  disabled={isEnhancing}
+                  className="text-xs"
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {isEnhancing ? "Enhancing..." : "Enhance with AI"}
+                </Button>
                 {isOriginalModified && (
                   <Button variant="outline" size="sm" onClick={handleRevert} className="text-xs">
                     <RotateCcw className="mr-2 h-4 w-4" />
@@ -671,7 +673,7 @@ the late 50's and 60's.`
                     <option value="">Select format</option>
                     <option value="txt">TXT</option>
                     <option value="vtt">VTT</option>
-                    <option value="alto">ALTO</option>
+                    <option value="doc">DOC</option>
                     <option value="hocr">hOCR</option>
                   </select>
                 </div>
@@ -683,11 +685,7 @@ the late 50's and 60's.`
               onChange={handleTextChange}
               onMouseUp={handleTextHighlight}
               onClick={handleTranscriptClick}
-              onKeyUp={(e) => {
-                handleTextHighlight()
-                handleCursorMove(e)
-              }}
-              onMouseMove={handleCursorMove}
+              onKeyUp={handleTextHighlight}
               className="w-full flex-1 p-4 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary font-sans text-sm"
               placeholder="Transcript will appear here..."
               style={{ minHeight: "calc(100vh - 300px)" }}
